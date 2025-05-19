@@ -1,7 +1,7 @@
 package fr.upem.net.chatvabien.protocol;
 
 public enum OPCODE {
-    LOGIN((byte) 11),
+    LOGIN((byte) 0),
     LOGINAUTH((byte) 1),
     LOGIN_ACCEPTED((byte) 2),
     LOGIN_REFUSED((byte) 3),
@@ -11,7 +11,9 @@ public enum OPCODE {
     KO_PRIVATE((byte) 7),
     OPEN((byte) 8),
     FILE((byte) 9),
-    NOPE((byte) 10);
+    NOPE((byte) 10),
+	GET_CONNECTED_USERS((byte) 11),
+	CONNECTED_USERS_LIST((byte) 12);
 
     private final byte code;
 

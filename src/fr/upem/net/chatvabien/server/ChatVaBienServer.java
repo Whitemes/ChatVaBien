@@ -17,6 +17,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import fr.upem.net.chatvabien.protocol.ByteReader;
+import fr.upem.net.chatvabien.protocol.GetUsersRequest;
 import fr.upem.net.chatvabien.protocol.IntReader;
 import fr.upem.net.chatvabien.protocol.IpReader;
 import fr.upem.net.chatvabien.protocol.LoginRequest;
@@ -26,12 +27,14 @@ import fr.upem.net.chatvabien.protocol.OPCODE;
 import fr.upem.net.chatvabien.protocol.Reader.ProcessStatus;
 import fr.upem.net.chatvabien.protocol.Request;
 import fr.upem.net.chatvabien.protocol.StringReader;
+import fr.upem.net.chatvabien.protocol.User;
 
 public class ChatVaBienServer {
 	private static final Logger logger = Logger.getLogger(ChatVaBienServer.class.getName());
 	private static final Charset UTF8 = Charset.forName("UTF8");
 	
-	private final Map<Long, SocketChannel> loggedUsers = new ConcurrentHashMap<>();
+	//private final Map<Long, SocketChannel> loggedUsers = new ConcurrentHashMap<>();
+	private final Map<Long, User> loggedUsers = new ConcurrentHashMap<>();
 	
     private final ServerSocketChannel serverSocketChannel;
     private final Selector selector;
@@ -116,16 +119,17 @@ public class ChatVaBienServer {
         private final IpReader ipReader = new IpReader();
         private final IntReader intReader = new IntReader();
 
-        private enum State {WAITING_TOTAL_SIZE, WAITING_OPCODE, WAITING_ID, WAITING_IP, WAITING_MESSAGE, DONE, ERROR}
+        private enum State {WAITING_TOTAL_SIZE, WAITING_OPCODE, WAITING_ID, WAITING_IP, WAITING_PEUSDO, WAITING_MESSAGE, DONE, ERROR}
         private State state = State.WAITING_TOTAL_SIZE;
         private byte opcode;
         private long id;
         private int totalSize;
         private String message;
+        private String peusdo;
 
         private boolean closed = false;
 
-        Context(SelectionKey key, Map<Long, SocketChannel> loggedUsers) {
+        Context(SelectionKey key, Map<Long, User> loggedUsers) {
             this.key = key;
             this.sc = (SocketChannel) key.channel();
         }
@@ -196,16 +200,7 @@ public class ChatVaBienServer {
                 return;
             }
             switch (op) {
-            case LOGIN -> {
-                if (loggedUsers.containsKey(id)) {
-                	logger.info("User already logged in: " + id);
-                	sendLoginStatus(false);
-                } else {
-                    loggedUsers.put(id, sc);
-                    logger.info("User logged in: " + id);
-                    sendLoginStatus(true);
-                }
-            }
+            
             case LOGINAUTH -> {
             	boolean exists = loggedUsers.containsKey(id);
                 logger.info("Login check for " + id + ": " + (exists ? "OK" : "Not logged in"));
@@ -246,9 +241,28 @@ public class ChatVaBienServer {
             if (loggedUsers.containsKey(id)) {
                 sendLoginStatus(false);
             } else {
-                loggedUsers.put(id, sc);
+                loggedUsers.put(id, new User(peusdo, sc, false));
                 sendLoginStatus(true);
             }
+        }
+        
+        public void handleGetUsers() {
+        	StringBuilder sb = new StringBuilder();
+            for (Map.Entry<Long, User> entry : loggedUsers.entrySet()) {
+                sb.append(entry.getKey()).append(": ").append(entry.getValue().pseudo()).append("\n");
+            }
+            ByteBuffer response = encodeUserList(sb.toString());
+            queueMessage(response);
+        }
+        
+        private ByteBuffer encodeUserList(String userList) {
+        	var encodedUserList = UTF8.encode(userList);
+            ByteBuffer bb = ByteBuffer.allocate(1 + Integer.BYTES + encodedUserList.remaining());
+            bb.put(OPCODE.GET_CONNECTED_USERS.getCode()); // ou un autre opcode de réponse
+            bb.putInt(encodedUserList.remaining());
+            bb.put(encodedUserList);
+            bb.flip();
+            return bb;
         }
         
         private void sendLoginStatus(boolean accepted) {
@@ -314,9 +328,24 @@ public class ChatVaBienServer {
                             InetAddress ip = ipReader.get();
                             ipReader.reset();
                             logger.info("IP reçue: " + ip.getHostAddress());
+                            state = State.WAITING_PEUSDO;
+                        } else if (status == ProcessStatus.REFILL) {
+                            return;
+                        } else {
+                            closed = true;
+                            return;
+                        }
+                    }
+                    case WAITING_PEUSDO -> {
+                        var status = stringReader.process(bufferIn);
+                        if (status == ProcessStatus.DONE) {
+                            message = stringReader.get();
+                            stringReader.reset();
+                            logger.info("Peusdo reçu: " + message);
                             if (opcode == OPCODE.MESSAGE.getCode()) {
                                 state = State.WAITING_MESSAGE;
-                            } else {
+                            }
+                           else {
                                 state = State.DONE;
                             }
                         } else if (status == ProcessStatus.REFILL) {
@@ -345,7 +374,7 @@ public class ChatVaBienServer {
 	                    Request request = switch (OPCODE.fromCode(opcode)) {
 	                        case LOGIN -> new LoginRequest(id);
 	                        case MESSAGE -> new MessageRequest(id, message);
-	                        
+	                        case GET_CONNECTED_USERS -> new GetUsersRequest();
 	                        default -> null;
 	                    };
 	
@@ -361,6 +390,7 @@ public class ChatVaBienServer {
                         closed = true;
                         return;
                     }
+				default -> throw new IllegalArgumentException("Unexpected value: " + state);
                 }
             }
         }
@@ -413,9 +443,9 @@ public class ChatVaBienServer {
         
         public void broadcastMessage(long senderId, String message) {
             ByteBuffer bb = encodeBroadcastMessage(senderId, message);
-            for (Map.Entry<Long, SocketChannel> entry : loggedUsers.entrySet()) {
+            for (Map.Entry<Long, User> entry : loggedUsers.entrySet()) {
                 //long userId = entry.getKey();
-                SocketChannel userChannel = entry.getValue();
+                SocketChannel userChannel = entry.getValue().sc();
                 if (userChannel.isOpen()) {  // ← SUPPRIME `userId != senderId`
                     SelectionKey userKey = userChannel.keyFor(selector);
                     if (userKey != null) {
