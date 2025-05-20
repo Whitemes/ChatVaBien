@@ -33,7 +33,6 @@ public class ChatVaBienServer {
 	private static final Logger logger = Logger.getLogger(ChatVaBienServer.class.getName());
 	private static final Charset UTF8 = Charset.forName("UTF8");
 	
-	//private final Map<Long, SocketChannel> loggedUsers = new ConcurrentHashMap<>();
 	private final Map<Long, User> loggedUsers = new ConcurrentHashMap<>();
 	
     private final ServerSocketChannel serverSocketChannel;
@@ -154,10 +153,9 @@ public class ChatVaBienServer {
                 ByteBuffer current = queueOut.peek();
                 sc.write(current);
                 if (current.hasRemaining()) {
-                    // Pas tout envoyé, on attend le prochain tour
                     break;
                 }
-                queueOut.remove(); // Message complètement envoyé
+                queueOut.remove();
             }
 
             if (queueOut.isEmpty()) {
@@ -193,50 +191,6 @@ public class ChatVaBienServer {
             return closed;
         }
         
-        private void handleMessage(byte opcode, long id) {
-        	OPCODE op = OPCODE.fromCode(opcode);
-            if (op == null) {
-                System.err.println("Unknown opcode: " + opcode);
-                return;
-            }
-            switch (op) {
-            
-            case LOGINAUTH -> {
-            	boolean exists = loggedUsers.containsKey(id);
-                logger.info("Login check for " + id + ": " + (exists ? "OK" : "Not logged in"));
-                sendLoginStatus(true);
-            }
-            case LOGIN_ACCEPTED -> {
-            	logger.info("Login accepted for " + id);
-            }
-            case LOGIN_REFUSED -> {
-            	logger.info("Login refused for " + id);
-            }
-            case MESSAGE -> {
-            	logger.info("Message received for " + id);
-            }
-            case REQUEST_PRIVATE -> {
-            	logger.info("Private message request for " + id);
-            }
-            case OK_PRIVATE -> {
-            	logger.info("Private message accepted for " + id);
-            }
-            case KO_PRIVATE -> {
-            	logger.info("Private message failed for " + id);
-            }
-            case OPEN -> {
-            	logger.info("Open request for " + id);
-            }
-            case FILE -> {
-            	logger.info("File request for " + id);
-            }
-            case NOPE -> {
-            	logger.info("Nope response for " + id);
-            }
-            default -> logger.severe("Unhandled opcode: " + op);
-        }
-    }
-        
         public void handleLogin(long id) {
             if (loggedUsers.containsKey(id)) {
                 sendLoginStatus(false);
@@ -258,7 +212,7 @@ public class ChatVaBienServer {
         private ByteBuffer encodeUserList(String userList) {
         	var encodedUserList = UTF8.encode(userList);
             ByteBuffer bb = ByteBuffer.allocate(1 + Integer.BYTES + encodedUserList.remaining());
-            bb.put(OPCODE.GET_CONNECTED_USERS.getCode()); // ou un autre opcode de réponse
+            bb.put(OPCODE.CONNECTED_USERS_LIST.getCode()); // ou un autre opcode de réponse
             bb.putInt(encodedUserList.remaining());
             bb.put(encodedUserList);
             bb.flip();
@@ -298,7 +252,6 @@ public class ChatVaBienServer {
                             logger.info("Opcode reçu: " + opcode);
                             opcodeReader.reset();
                             state = State.WAITING_ID;
-                            //logger.info(state);
                         } else if (status == ProcessStatus.REFILL) {
                             return;
                         } else {
@@ -339,9 +292,9 @@ public class ChatVaBienServer {
                     case WAITING_PEUSDO -> {
                         var status = stringReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
-                            message = stringReader.get();
+                        	peusdo = stringReader.get();
                             stringReader.reset();
-                            logger.info("Peusdo reçu: " + message);
+                            logger.info("Peusdo reçu: " + peusdo);
                             if (opcode == OPCODE.MESSAGE.getCode()) {
                                 state = State.WAITING_MESSAGE;
                             }
@@ -379,7 +332,7 @@ public class ChatVaBienServer {
 	                    };
 	
 	                    if (request != null) {
-	                        request.handle(this); // traitement délégué à la requête
+	                        request.handle(this);
 	                    } else {
 	                        logger.warning("Unknown or unhandled opcode");
 	                    }
@@ -444,9 +397,8 @@ public class ChatVaBienServer {
         public void broadcastMessage(long senderId, String message) {
             ByteBuffer bb = encodeBroadcastMessage(senderId, message);
             for (Map.Entry<Long, User> entry : loggedUsers.entrySet()) {
-                //long userId = entry.getKey();
                 SocketChannel userChannel = entry.getValue().sc();
-                if (userChannel.isOpen()) {  // ← SUPPRIME `userId != senderId`
+                if (userChannel.isOpen()) {
                     SelectionKey userKey = userChannel.keyFor(selector);
                     if (userKey != null) {
                         Context userContext = (Context) userKey.attachment();
