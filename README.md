@@ -1,6 +1,13 @@
 # ChatVaBien-GRIB-RAMANANJATOVO
 
-
+## Pour lancer ChatVaBien
+Être dans le dossier src de ChatVaBien
+### Compilation
+javac fr/upem/net/chatvabien/**/*.java
+### Lancement Server
+java fr.upem.net.chatvabien.server.ChatVaBienServer 7777
+### Lancement Client
+java fr.upem.net.chatvabien.server.ClientTest
 
 ## Réparticition travail
 ### 1 - authentification sans mot de passe (Rayan)
