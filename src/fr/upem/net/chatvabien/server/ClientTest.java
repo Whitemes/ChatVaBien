@@ -4,7 +4,6 @@ import fr.upem.net.chatvabien.protocol.OPCODE;
 
 import java.io.*;
 import java.net.InetSocketAddress;
-import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
@@ -15,6 +14,7 @@ public class ClientTest {
     private static final String SERVER_ADDRESS = "localhost";
     private static final int SERVER_PORT = 7777;
     private static String peusdo;
+    private static String fileDirectory;
 
     private static void sendMessage(int version, SocketChannel sc, byte opcode, long id, String message, String peusdo) throws IOException {
         var ip = sc.socket().getLocalAddress().getAddress();
@@ -28,8 +28,6 @@ public class ClientTest {
         } else {
             size = 1 + Long.BYTES + 1 + ip.length + Integer.BYTES + encodedPeusdo.remaining();
         }
-        
-        
 
         ByteBuffer bb = ByteBuffer.allocate(Integer.BYTES + size);
         bb.putInt(size);
@@ -51,7 +49,7 @@ public class ClientTest {
 
     private static void startReceiver(SocketChannel sc) {
         new Thread(() -> {
-            ByteBuffer buffer = ByteBuffer.allocate(1024);
+            ByteBuffer buffer = ByteBuffer.allocate(1024 * 8);
             try {
                 while (true) {
                     buffer.clear();
@@ -77,7 +75,7 @@ public class ClientTest {
             return;
         }
 
-        byte rawOpcode = buffer.get();  // Lire l'opcode
+        byte rawOpcode = buffer.get();
         OPCODE op = OPCODE.fromCode(rawOpcode);
         if (op == null) {
             System.out.printf("Opcode inconnu : %02X\n", rawOpcode);
@@ -96,10 +94,25 @@ public class ClientTest {
             case LOGINAUTH:
                 System.out.println("Authentification réussie.");
                 break;
-                
+
             case CONNECTED_USERS_LIST:
-            	System.out.println("Voici les utilisateurs connectés en ce moment : ");
-            	break;
+                if (buffer.remaining() < Integer.BYTES) {
+                    System.out.println("Erreur : données insuffisantes pour la taille de la liste.");
+                    return;
+                }
+
+                int listLength = buffer.getInt();
+                if (buffer.remaining() < listLength) {
+                    System.out.println("Erreur : données incomplètes pour la liste des utilisateurs.");
+                    return;
+                }
+
+                byte[] listBytes = new byte[listLength];
+                buffer.get(listBytes);
+                String userList = new String(listBytes, StandardCharsets.UTF_8);
+
+                System.out.println("Voici les utilisateurs connectés en ce moment :\n" + userList);
+                break;
 
             case MESSAGE:
                 if (buffer.remaining() < Long.BYTES + Integer.BYTES) {
@@ -107,24 +120,38 @@ public class ClientTest {
                     return;
                 }
 
-                // Lire l'ID de l'expéditeur
                 long senderId = buffer.getLong();
-                System.out.println("ID de l'expéditeur : " + senderId);
-
-                // Lire la longueur du message
                 int msgLength = buffer.getInt();
-                System.out.println("Longueur du message : " + msgLength);
 
                 if (buffer.remaining() < msgLength) {
                     System.out.println("Erreur : le message est incomplet.");
                     return;
                 }
 
-                // Lire le message
                 byte[] msgBytes = new byte[msgLength];
-                buffer.get(msgBytes);  // Extraire les données du buffer
+                buffer.get(msgBytes);
                 String message = new String(msgBytes, StandardCharsets.UTF_8);
                 System.out.println("Message reçu de " + senderId + " : " + message);
+
+                // Traitement de fichiers reçus
+                if (message.startsWith("[Fichier:")) {
+                    int endName = message.indexOf("]");
+                    if (endName != -1) {
+                        String header = message.substring(0, endName + 1);
+                        String base64 = message.substring(endName + 2);
+                        String filename = header.substring(10, header.length() - 1).trim();
+
+                        byte[] data = java.util.Base64.getDecoder().decode(base64);
+                        File receivedFile = new File(fileDirectory, "reçu_" + filename);
+
+                        try (FileOutputStream fos = new FileOutputStream(receivedFile)) {
+                            fos.write(data);
+                            System.out.println("Fichier reçu et sauvegardé : " + receivedFile.getAbsolutePath());
+                        } catch (IOException e) {
+                            System.err.println("Erreur lors de la sauvegarde du fichier : " + e.getMessage());
+                        }
+                    }
+                }
                 break;
 
             default:
@@ -132,43 +159,42 @@ public class ClientTest {
                 break;
         }
     }
-    
-    private static void login(SocketChannel sc, long id) throws IOException, InterruptedException {
-        Scanner scanner = new Scanner(System.in);
 
-        // Demande du pseudonyme
-        System.out.print("Entrez votre pseudonyme: ");
-        String username = scanner.nextLine().trim();
-
-        // Demande du mot de passe
-        System.out.print("Entrez votre mot de passe (laisser vide pour un login simple) : ");
-        String password = scanner.nextLine().trim();
-
-        // Vérifier si le mot de passe est vide
-        String credentials = username; // Le login consiste uniquement du pseudonyme dans tous les cas.
+    private static void login(SocketChannel sc, long id, String username, String password) throws IOException, InterruptedException {
+        String credentials = username;
         peusdo = username;
         byte opcodeToSend;
+
         if (!password.isEmpty()) {
-            // Si le mot de passe n'est pas vide, on envoie LOGINAUTH
             credentials += ":" + password;
             opcodeToSend = OPCODE.LOGINAUTH.getCode();
         } else {
-            // Si le mot de passe est vide, on envoie LOGIN
             opcodeToSend = OPCODE.LOGIN.getCode();
         }
 
-        // Envoi de la demande de login au serveur
         sendMessage(4, sc, opcodeToSend, id, "", peusdo);
-
-        // Attendre une réponse du serveur pour l'authentification
         System.out.println("Tentative de connexion...");
-        Thread.sleep(200); // Attendre la réponse
+        Thread.sleep(200);
 
-        // Une fois connecté, envoyer une requête pour obtenir les pseudos des utilisateurs connectés
         sendMessage(4, sc, OPCODE.GET_CONNECTED_USERS.getCode(), id, "", peusdo);
     }
 
     public static void main(String[] args) {
+        if (args.length < 3) {
+            System.out.println("Usage: java ClientTest <pseudonyme> <mot_de_passe> <dossier_fichier>");
+            return;
+        }
+
+        String username = args[0];
+        String password = args[1];
+        fileDirectory = args[2];
+
+        File dir = new File(fileDirectory);
+        if (!dir.exists() || !dir.isDirectory()) {
+            System.err.println("Erreur: Le dossier spécifié n'existe pas ou n'est pas un dossier.");
+            return;
+        }
+
         try (SocketChannel sc = SocketChannel.open()) {
             sc.connect(new InetSocketAddress(SERVER_ADDRESS, SERVER_PORT));
             System.out.println("Connexion établie avec le serveur.");
@@ -176,18 +202,16 @@ public class ClientTest {
             Scanner scanner = new Scanner(System.in);
             startReceiver(sc);
 
-            long id = System.currentTimeMillis(); // identifiant unique
+            long id = System.currentTimeMillis();
 
-            login(sc, id); // Appel à la méthode de login
+            login(sc, id, username, password);
 
-            // Une fois connecté, continuer le programme
             while (true) {
                 System.out.print("> ");
                 String line = scanner.nextLine().trim();
                 if (line.isEmpty()) continue;
 
                 if (line.startsWith("@")) {
-                    // Message privé : @login message
                     int spaceIndex = line.indexOf(' ');
                     if (spaceIndex == -1 || spaceIndex == 1) {
                         System.out.println("Syntaxe invalide. Utilisez : @login message");
@@ -195,13 +219,10 @@ public class ClientTest {
                     }
                     String login = line.substring(1, spaceIndex);
                     String msg = line.substring(spaceIndex + 1);
-                    // Simule une demande de connexion privée + envoi message
-                    System.out.println("Demande de connexion privée avec " + login + "...");
                     sendMessage(4, sc, OPCODE.REQUEST_PRIVATE.getCode(), id, login, peusdo);
-                    Thread.sleep(200); // petit délai (idéalement, attendre une réponse)
+                    Thread.sleep(200);
                     sendMessage(4, sc, OPCODE.MESSAGE.getCode(), id, "[Privé à " + login + "] " + msg, peusdo);
                 } else if (line.startsWith("/")) {
-                    // Envoi de fichier : /login fichier
                     int spaceIndex = line.indexOf(' ');
                     if (spaceIndex == -1 || spaceIndex == 1) {
                         System.out.println("Syntaxe invalide. Utilisez : /login fichier.txt");
@@ -210,7 +231,7 @@ public class ClientTest {
                     String login = line.substring(1, spaceIndex);
                     String filename = line.substring(spaceIndex + 1);
 
-                    File file = new File(filename);
+                    File file = new File(fileDirectory, filename);
                     if (!file.exists()) {
                         System.out.println("Fichier introuvable : " + filename);
                         continue;
@@ -218,7 +239,7 @@ public class ClientTest {
 
                     System.out.println("Envoi du fichier à " + login + "...");
                     sendMessage(4, sc, OPCODE.REQUEST_PRIVATE.getCode(), id, login, peusdo);
-                    Thread.sleep(200); // attendre OK_PRIVATE
+                    Thread.sleep(200);
 
                     try (FileInputStream fis = new FileInputStream(file)) {
                         byte[] content = fis.readAllBytes();
@@ -229,7 +250,6 @@ public class ClientTest {
                     }
 
                 } else {
-                    // Message public
                     sendMessage(4, sc, OPCODE.MESSAGE.getCode(), id, line, peusdo);
                 }
             }
