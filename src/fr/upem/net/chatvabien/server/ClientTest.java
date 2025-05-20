@@ -24,17 +24,17 @@ public class ClientTest {
 
         if (!message.isEmpty()) {
             encodedMessage = StandardCharsets.UTF_8.encode(message);
-            size = 1 + Long.BYTES + 1 + ip.length + Integer.BYTES + encodedPeusdo.remaining() + Integer.BYTES + encodedMessage.remaining();
+            //size = 1 + Long.BYTES + 1 + ip.length + Integer.BYTES + encodedPeusdo.remaining() + Integer.BYTES + encodedMessage.remaining();
         } else {
-            size = 1 + Long.BYTES + 1 + ip.length + Integer.BYTES + encodedPeusdo.remaining();
+            //size = 1 + Long.BYTES + 1 + ip.length + Integer.BYTES + encodedPeusdo.remaining();
         }
 
-        ByteBuffer bb = ByteBuffer.allocate(Integer.BYTES + size);
-        bb.putInt(size);
+        //ByteBuffer bb = ByteBuffer.allocate(Integer.BYTES + size);
+        ByteBuffer bb = ByteBuffer.allocate(1024);
         bb.put(opcode);
-        bb.putLong(id);
-        bb.put((byte) version);
-        bb.put(ip);
+        //bb.putLong(id);
+        //bb.put((byte) version);
+        //bb.put(ip);
         bb.putInt(encodedPeusdo.remaining());
         bb.put(encodedPeusdo);
         if (encodedMessage != null) {
@@ -120,7 +120,7 @@ public class ClientTest {
                     return;
                 }
 
-                long senderId = buffer.getLong();
+                int senderId = buffer.getInt();
                 int msgLength = buffer.getInt();
 
                 if (buffer.remaining() < msgLength) {
