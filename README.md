@@ -7,7 +7,7 @@ javac fr/upem/net/chatvabien/**/*.java
 ### Lancement Server
 java fr.upem.net.chatvabien.server.ChatVaBienServer 7777
 ### Lancement Client
-java fr.upem.net.chatvabien.server.ClientTest <login> <mot de passe ("" pour laisser vide)> <fichier pour envoyer et recevoir fichiers>
+java fr.upem.net.chatvabien.server.ClientTest (login) (mot de passe ("" pour laisser vide)= (fichier pour envoyer et recevoir fichiers)
 
 ## Réparticition travail
 ### 1 - authentification sans mot de passe (Rayan)
