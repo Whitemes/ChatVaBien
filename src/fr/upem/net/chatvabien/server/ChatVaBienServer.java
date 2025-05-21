@@ -1,6 +1,7 @@
 package fr.upem.net.chatvabien.server;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
@@ -17,10 +18,13 @@ import java.util.logging.Logger;
 
 import fr.upem.net.chatvabien.protocol.ByteReader;
 import fr.upem.net.chatvabien.protocol.GetUsersRequest;
+import fr.upem.net.chatvabien.protocol.Ip;
 import fr.upem.net.chatvabien.protocol.IpReader;
+import fr.upem.net.chatvabien.protocol.KOPrivateResquest;
 import fr.upem.net.chatvabien.protocol.LoginRequest;
 import fr.upem.net.chatvabien.protocol.LongReader;
 import fr.upem.net.chatvabien.protocol.MessageRequest;
+import fr.upem.net.chatvabien.protocol.OKPrivateRequest;
 import fr.upem.net.chatvabien.protocol.OPCODE;
 import fr.upem.net.chatvabien.protocol.PrivateRequest;
 import fr.upem.net.chatvabien.protocol.Reader.ProcessStatus;
@@ -125,7 +129,10 @@ public class ChatVaBienServer {
         private String message;
         private String peusdo;
         private String targetPeusdo;
-        private long idResquest;
+        private long token;
+        private PrivateRequest privateResquest;
+        private Ip clientIp;
+        
 
         private boolean closed = false;
 
@@ -221,6 +228,8 @@ public class ChatVaBienServer {
         		return;
         	}
         	
+        	logger.log(Level.INFO, "Requete privée reçue de " + peusdo + " à " + targetPeusdo);
+        	
         	User targetUser = loggedUsers.get(targetPeusdo);
         	var request = encodePrivateRequest();
         	
@@ -241,7 +250,103 @@ public class ChatVaBienServer {
         	ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + resquesterBytes.remaining() + Integer.BYTES + targetBytes.remaining());
         	bb.put(OPCODE.REQUEST_PRIVATE.getCode());
         	bb.putInt(resquesterBytes.remaining());
-        	int i = 0;
+        	bb.put(resquesterBytes);
+        	bb.putInt(targetBytes.remaining());
+        	bb.put(targetBytes);
+        	bb.flip();
+        	return bb;
+        }
+        
+        public void handleOKPrivateRequest() {
+        	if(!loggedUsers.containsKey(peusdo)) {
+        		logger.log(Level.WARNING, "Requete privée reçu d'un utilisateur non connecté.");
+        		return;
+        	}
+        	if(!loggedUsers.containsKey(targetPeusdo)) {
+        		logger.log(Level.WARNING, "Requete privée à destinataire d'un utilisateur non connecté.");
+        		return;
+        	}
+        	
+        	logger.log(Level.INFO, "Requete privée acceptée reçue de " + peusdo + " à " + targetPeusdo);
+        	
+        	User senderUser = loggedUsers.get(peusdo);
+        	var request = encodeOKPrivateRequest();
+        	
+        	SocketChannel userChannel = senderUser.sc();
+            if (userChannel.isOpen()) {
+                SelectionKey userKey = userChannel.keyFor(selector);
+                if (userKey != null) {
+                    Context userContext = (Context) userKey.attachment();
+                    userContext.queueMessage(request.duplicate());
+                }
+            }
+        }
+        
+        private ByteBuffer encodeOKPrivateRequest() {
+        	var resquesterBytes = UTF8.encode(peusdo);
+        	var targetBytes = UTF8.encode(targetPeusdo);
+        	var ipBytes = UTF8.encode(clientIp.ip().toString());
+        	ByteBuffer socketBytes = null;
+			try {
+				socketBytes = UTF8.encode(sc.getLocalAddress().toString());
+			} catch (IOException e) {
+				logger.log(Level.SEVERE, "IO Exception");
+				throw new AssertionError();
+			}
+			
+        	ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + 
+        			Integer.BYTES + resquesterBytes.remaining() + 
+        			Integer.BYTES + targetBytes.remaining() +
+        			Byte.BYTES + socketBytes.remaining() +
+        			Long.BYTES);
+        	
+        	bb.put(OPCODE.OK_PRIVATE.getCode());
+        	bb.putInt(resquesterBytes.remaining());
+        	bb.put(resquesterBytes);
+        	bb.putInt(targetBytes.remaining());
+        	bb.put(targetBytes);
+        	bb.put(clientIp.version());
+        	bb.put(ipBytes);
+        	bb.putLong(token);
+        	bb.flip();
+        	return bb;
+        }
+        
+        public void handleKOPrivateRequest() {
+        	if(!loggedUsers.containsKey(peusdo)) {
+        		logger.log(Level.WARNING, "Requete privée reçu d'un utilisateur non connecté.");
+        		return;
+        	}
+        	if(!loggedUsers.containsKey(targetPeusdo)) {
+        		logger.log(Level.WARNING, "Requete privée à destinataire d'un utilisateur non connecté.");
+        		return;
+        	}
+        	
+        	logger.log(Level.INFO, "Requete privée refusée reçue de " + peusdo + " à " + targetPeusdo);
+        	
+        	User senderUser = loggedUsers.get(peusdo);
+        	var request = encodeKOPrivateRequest();
+        	
+        	SocketChannel userChannel = senderUser.sc();
+            if (userChannel.isOpen()) {
+                SelectionKey userKey = userChannel.keyFor(selector);
+                if (userKey != null) {
+                    Context userContext = (Context) userKey.attachment();
+                    userContext.queueMessage(request.duplicate());
+                }
+            }
+        }
+        
+        private ByteBuffer encodeKOPrivateRequest() {
+        	var resquesterBytes = UTF8.encode(peusdo);
+        	var targetBytes = UTF8.encode(targetPeusdo);
+        	
+        	ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + 
+        			Integer.BYTES + resquesterBytes.remaining() + 
+        			Integer.BYTES + targetBytes.remaining());
+        	
+        	bb.put(OPCODE.KO_PRIVATE.getCode());
+        	bb.putInt(resquesterBytes.remaining());
         	bb.put(resquesterBytes);
         	bb.putInt(targetBytes.remaining());
         	bb.put(targetBytes);
@@ -299,36 +404,34 @@ public class ChatVaBienServer {
                             return;
                         }
                     }
-//                    case WAITING_ID -> {
-//                        var status = idReader.process(bufferIn);
-//                        if (status == ProcessStatus.DONE) {
-//                            idResquest = idReader.get();
-//                            logger.info("Id reçu: " + idResquest);
-//                            idReader.reset();
-//                            //state = State.WAITING_IP;
-//                        } else if (status == ProcessStatus.REFILL) {
-//                            return;
-//                        } else {
-//                            closed = true;
-//                            return;
-//                        }
-//                    }
-                    
-//                    case WAITING_IP -> {
-//                    	logger.info("Buffer contenu avant IP read: " + dumpBuffer(bufferIn));
-//                        var status = ipReader.process(bufferIn);
-//                        if (status == ProcessStatus.DONE) {
-//                            InetAddress ip = ipReader.get();
-//                            ipReader.reset();
-//                            logger.info("IP reçue: " + ip.getHostAddress());
-//                            state = State.WAITING_PEUSDO;
-//                        } else if (status == ProcessStatus.REFILL) {
-//                            return;
-//                        } else {
-//                            closed = true;
-//                            return;
-//                        }
-//                    }
+                    case WAITING_ID -> {
+                        var status = idReader.process(bufferIn);
+                        if (status == ProcessStatus.DONE) {
+                            token = idReader.get();
+                            logger.info("Id reçu: " + token);
+                            idReader.reset();
+                            state = State.DONE;
+                        } else if (status == ProcessStatus.REFILL) {
+                            return;
+                        } else {
+                            closed = true;
+                            return;
+                        }
+                    }
+                    case WAITING_IP -> {
+                        var status = ipReader.process(bufferIn);
+                        if (status == ProcessStatus.DONE) {
+                            clientIp = ipReader.get();
+                            ipReader.reset();
+                            logger.info("IP reçue: " + clientIp.ip());
+                            state = State.WAITING_ID;
+                        } else if (status == ProcessStatus.REFILL) {
+                            return;
+                        } else {
+                            closed = true;
+                            return;
+                        }
+                    }
                     case WAITING_PEUSDO -> {
                         var status = stringReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
@@ -338,7 +441,7 @@ public class ChatVaBienServer {
                             if (opcode == OPCODE.MESSAGE.getCode()) {
                                 state = State.WAITING_MESSAGE;
                             } 
-                            else if (opcode == OPCODE.REQUEST_PRIVATE.getCode()) {
+                            else if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.OK_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
                             	state = State.WAITING_TARGET_PEUSDO;
                             }
                            else {
@@ -357,7 +460,12 @@ public class ChatVaBienServer {
                         	targetPeusdo = stringReader.get();
                             stringReader.reset();
                             logger.info("target Peusdo reçu: " + peusdo);
-                            state = State.DONE;
+                            if(opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
+                            	state = State.DONE;
+                            } else if (opcode == OPCODE.OK_PRIVATE.getCode()) {
+                            	state = State.WAITING_IP;
+                            }
+                            
                         } else if (status == ProcessStatus.REFILL) {
                             return;
                         } else {
@@ -386,6 +494,8 @@ public class ChatVaBienServer {
 	                        case MESSAGE -> new MessageRequest(peusdo, message);
 	                        case GET_CONNECTED_USERS -> new GetUsersRequest();
 	                        case REQUEST_PRIVATE -> new PrivateRequest(peusdo, targetPeusdo);
+	                        case OK_PRIVATE -> new OKPrivateRequest(peusdo, targetPeusdo, token);
+	                        case KO_PRIVATE -> new KOPrivateResquest(peusdo, targetPeusdo);
 	                        default -> null;
 	                    };
 	

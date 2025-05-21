@@ -18,6 +18,8 @@ public class ClientTest {
     private static final int MAX_BUFFER_SIZE = 1024;
     private static String peusdo;
     private static String fileDirectory;
+    private static SocketChannel MainSc;
+    private static boolean isPrivateResquested = false;
 
     private static void sendMessage(int version, SocketChannel sc, byte opcode, long id, String message, String peusdo) throws IOException {
         var ip = sc.socket().getLocalAddress().getAddress();
@@ -35,9 +37,13 @@ public class ClientTest {
         //ByteBuffer bb = ByteBuffer.allocate(Integer.BYTES + size);
         ByteBuffer bb = ByteBuffer.allocate(1024);
         bb.put(opcode);
-        //bb.putLong(id);
-        //bb.put((byte) version);
-        //bb.put(ip);
+        
+        if(opcode == OPCODE.OK_PRIVATE.getCode()) {
+        	bb.put((byte) version);
+        	bb.put(ip);
+        	bb.putLong(id);
+        }
+        
         bb.putInt(encodedPeusdo.remaining());
         bb.put(encodedPeusdo);
         if (encodedMessage != null) {
@@ -72,7 +78,7 @@ public class ClientTest {
         }).start();
     }
 
-    private static void decodeMessage(ByteBuffer buffer) {
+    private static void decodeMessage(ByteBuffer buffer) throws IOException {
         if (!buffer.hasRemaining()) {
             System.out.println("Message vide.");
             return;
@@ -84,6 +90,8 @@ public class ClientTest {
             System.out.printf("Opcode inconnu : %02X\n", rawOpcode);
             return;
         }
+        
+        int i = 0;
 
         switch (op) {
             case LOGIN_ACCEPTED:
@@ -97,6 +105,90 @@ public class ClientTest {
             case LOGINAUTH:
                 System.out.println("Authentification réussie.");
                 break;
+            
+            case REQUEST_PRIVATE:
+            	int senderPrivateLength = buffer.getInt();
+            	i = 0;
+                ByteBuffer senderPrivateBytes = ByteBuffer.allocate(senderPrivateLength);
+                while(i < senderPrivateLength) {
+                	senderPrivateBytes.put(buffer.get());
+                	i++;
+                }
+                senderPrivateBytes.flip();
+                String senderPrivate = UTF8.decode(senderPrivateBytes).toString();
+                int targetPrivateLength = buffer.getInt();
+            	i = 0;
+                ByteBuffer targetrBytes = ByteBuffer.allocate(targetPrivateLength);
+                while(i < targetPrivateLength) {
+                	targetrBytes.put(buffer.get());
+                	i++;
+                }
+                targetrBytes.flip();
+                String targetPrivate = UTF8.decode(targetrBytes).toString();
+                
+                System.out.println("Demande de connexion privée reçue de : " + senderPrivate);
+                System.out.print("Accepter ? (o/n) > ");
+                
+                synchronized (System.in) {
+                    Scanner scan = new Scanner(System.in);
+                    String reply = scan.nextLine().trim().toLowerCase();
+                    isPrivateResquested = true;
+
+                    if (reply.equals("o") || reply.equals("oui")) {
+                        sendMessage(4, MainSc, OPCODE.OK_PRIVATE.getCode(), System.currentTimeMillis(), "", peusdo);
+                        System.out.println("Connexion privée acceptée avec " + senderPrivate);
+                    } else {
+                    	sendMessage(4, MainSc, OPCODE.KO_PRIVATE.getCode(), System.currentTimeMillis(), "", peusdo);
+                        System.out.println("Connexion privée refusée.");
+                    }
+                }
+                
+                isPrivateResquested = false;
+
+                
+            	break;
+            	
+            case OK_PRIVATE:
+            	int senderOKPrivateLength = buffer.getInt();
+            	i = 0;
+                ByteBuffer senderOKPrivateBytes = ByteBuffer.allocate(senderOKPrivateLength);
+                while(i < senderOKPrivateLength) {
+                	senderOKPrivateBytes.put(buffer.get());
+                	i++;
+                }
+                senderOKPrivateBytes.flip();
+                String senderOKPrivate = UTF8.decode(senderOKPrivateBytes).toString();
+                int targetOKPrivateLength = buffer.getInt();
+            	i = 0;
+                ByteBuffer targetOKBytes = ByteBuffer.allocate(targetOKPrivateLength);
+                while(i < targetOKPrivateLength) {
+                	targetOKBytes.put(buffer.get());
+                	i++;
+                }
+                targetOKBytes.flip();
+                String targetOKPrivate = UTF8.decode(targetOKBytes).toString();
+            	break;
+            	
+            case KO_PRIVATE:
+            	int senderKOPrivateLength = buffer.getInt();
+            	i = 0;
+                ByteBuffer senderKOPrivateBytes = ByteBuffer.allocate(senderKOPrivateLength);
+                while(i < senderKOPrivateLength) {
+                	senderKOPrivateBytes.put(buffer.get());
+                	i++;
+                }
+                senderKOPrivateBytes.flip();
+                String senderKOPrivate = UTF8.decode(senderKOPrivateBytes).toString();
+                int targetKOPrivateLength = buffer.getInt();
+            	i = 0;
+                ByteBuffer targetKOBytes = ByteBuffer.allocate(targetKOPrivateLength);
+                while(i < targetKOPrivateLength) {
+                	targetKOBytes.put(buffer.get());
+                	i++;
+                }
+                targetKOBytes.flip();
+                String targetKOPrivate = UTF8.decode(targetKOBytes).toString();
+            	break;
 
             case CONNECTED_USERS_LIST:
                 if (buffer.remaining() < Integer.BYTES) {
@@ -110,16 +202,21 @@ public class ClientTest {
                     return;
                 }
 
-                byte[] listBytes = new byte[listLength];
-                buffer.get(listBytes);
-                String userList = new String(listBytes, StandardCharsets.UTF_8);
+                ByteBuffer listBytes = ByteBuffer.allocate(listLength);
+                i = 0;
+                while(i < listLength) {
+                	listBytes.put(buffer.get());
+                	i++;
+                }
+                listBytes.flip();
+                String userList = UTF8.decode(listBytes).toString();
 
                 System.out.println("Utilisateurs connectés :\n" + userList);
                 break;
 
             case MESSAGE:
                 int senderLength = buffer.getInt();
-                int i = 0;
+                i = 0;
                 ByteBuffer senderBytes = ByteBuffer.allocate(senderLength);
                 while(i < senderLength) {
                 	senderBytes.put(buffer.get());
@@ -181,6 +278,7 @@ public class ClientTest {
         }
 
         try (SocketChannel sc = SocketChannel.open()) {
+        	MainSc = sc;
             sc.connect(new InetSocketAddress(SERVER_ADDRESS, SERVER_PORT));
             System.out.println("Connexion établie avec le serveur.");
 
@@ -195,6 +293,12 @@ public class ClientTest {
                 System.out.print("> ");
                 String line = scanner.nextLine().trim();
                 if (line.isEmpty()) continue;
+                
+                if (line.equalsIgnoreCase("/getusers")) {
+                    sendMessage(4, sc, OPCODE.GET_CONNECTED_USERS.getCode(), id, "", peusdo);
+                    continue;
+                }
+
 
                 if (line.startsWith("@")) {
                     int spaceIndex = line.indexOf(' ');
@@ -206,7 +310,7 @@ public class ClientTest {
                     String msg = line.substring(spaceIndex + 1);
                     sendMessage(4, sc, OPCODE.REQUEST_PRIVATE.getCode(), id, login, peusdo);
                     Thread.sleep(200);
-                    sendMessage(4, sc, OPCODE.MESSAGE.getCode(), id, "[Privé à " + login + "] " + msg, peusdo);
+                    //sendMessage(4, sc, OPCODE.MESSAGE.getCode(), id, "[Privé à " + login + "] " + msg, peusdo);
                 } else if (line.startsWith("/")) {
                     int spaceIndex = line.indexOf(' ');
                     if (spaceIndex == -1 || spaceIndex == 1) {

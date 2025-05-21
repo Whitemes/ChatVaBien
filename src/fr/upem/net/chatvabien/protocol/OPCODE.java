@@ -14,6 +14,8 @@ public enum OPCODE {
     NOPE((byte) 10),
 	GET_CONNECTED_USERS((byte) 11),
 	CONNECTED_USERS_LIST((byte) 12);
+	
+	
 
     private final byte code;
 

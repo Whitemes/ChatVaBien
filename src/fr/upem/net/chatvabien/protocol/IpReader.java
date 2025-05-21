@@ -4,7 +4,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 
-public class IpReader implements Reader<InetAddress> {
+public class IpReader implements Reader<Ip> {
 
     private enum State { WAITING_TYPE, WAITING_ADDRESS, DONE, ERROR }
 
@@ -62,11 +62,11 @@ public class IpReader implements Reader<InetAddress> {
     }
 
     @Override
-    public InetAddress get() {
+    public Ip get() {
         if (state != State.DONE) {
             throw new IllegalStateException();
         }
-        return ip;
+        return new Ip(ipType, ip);
     }
 
     @Override
