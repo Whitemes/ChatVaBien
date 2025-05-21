@@ -17,3 +17,9 @@ java fr.upem.net.chatvabien.server.ClientTest (login) (mot de passe ("" pour lai
 ### 5 - message texte sur connexion privée (Johnny)
 ### 6 - fichiers sur connexion privée (Johnny)
 ### 7 - authentifcation avec mot de passe (Rayan)
+
+## A faire
+
+## Récrire correctement le Client
+## Diviser certaines classes ?
+## Codes d'erreurs
