@@ -6,6 +6,7 @@ import java.io.*;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Scanner;
 
@@ -13,6 +14,8 @@ public class ClientTest {
 
     private static final String SERVER_ADDRESS = "localhost";
     private static final int SERVER_PORT = 7777;
+    private static final Charset UTF8 = Charset.forName("UTF8");
+    private static final int MAX_BUFFER_SIZE = 1024;
     private static String peusdo;
     private static String fileDirectory;
 
@@ -111,47 +114,29 @@ public class ClientTest {
                 buffer.get(listBytes);
                 String userList = new String(listBytes, StandardCharsets.UTF_8);
 
-                System.out.println("Voici les utilisateurs connectés en ce moment :\n" + userList);
+                System.out.println("Utilisateurs connectés :\n" + userList);
                 break;
 
             case MESSAGE:
-                if (buffer.remaining() < Long.BYTES + Integer.BYTES) {
-                    System.out.println("Erreur : message trop court.");
-                    return;
+                int senderLength = buffer.getInt();
+                int i = 0;
+                ByteBuffer senderBytes = ByteBuffer.allocate(senderLength);
+                while(i < senderLength) {
+                	senderBytes.put(buffer.get());
+                	i++;
                 }
-
-                int senderId = buffer.getInt();
-                int msgLength = buffer.getInt();
-
-                if (buffer.remaining() < msgLength) {
-                    System.out.println("Erreur : le message est incomplet.");
-                    return;
+                senderBytes.flip();
+                String sender = UTF8.decode(senderBytes).toString();
+                int messageLength = buffer.getInt();
+                i = 0;
+                ByteBuffer msgBytes = ByteBuffer.allocate(messageLength);
+                while(i < messageLength) {
+                	msgBytes.put(buffer.get());
+                	i++;
                 }
-
-                byte[] msgBytes = new byte[msgLength];
-                buffer.get(msgBytes);
-                String message = new String(msgBytes, StandardCharsets.UTF_8);
-                System.out.println("Message reçu de " + senderId + " : " + message);
-
-                // Traitement de fichiers reçus
-                if (message.startsWith("[Fichier:")) {
-                    int endName = message.indexOf("]");
-                    if (endName != -1) {
-                        String header = message.substring(0, endName + 1);
-                        String base64 = message.substring(endName + 2);
-                        String filename = header.substring(10, header.length() - 1).trim();
-
-                        byte[] data = java.util.Base64.getDecoder().decode(base64);
-                        File receivedFile = new File(fileDirectory, "reçu_" + filename);
-
-                        try (FileOutputStream fos = new FileOutputStream(receivedFile)) {
-                            fos.write(data);
-                            System.out.println("Fichier reçu et sauvegardé : " + receivedFile.getAbsolutePath());
-                        } catch (IOException e) {
-                            System.err.println("Erreur lors de la sauvegarde du fichier : " + e.getMessage());
-                        }
-                    }
-                }
+                msgBytes.flip();
+                String message = UTF8.decode(msgBytes).toString();
+                System.out.println(sender + " : " + message);
                 break;
 
             default:
