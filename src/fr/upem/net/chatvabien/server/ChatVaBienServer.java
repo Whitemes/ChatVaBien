@@ -42,15 +42,25 @@ public class ChatVaBienServer {
     private final ServerSocketChannel serverSocketChannel;
     private final Selector selector;
     
+    private final SocketChannel mdpChannel;
+    private final SelectionKey mdpKey;
+    private final Map<Long, Context> pendingAuthRequests = new ConcurrentHashMap<>(); // pour lier réponse -> utilisateur
+    private long authIdCounter = 0;
+    
     private final Random random = new Random();
     
     
-    public ChatVaBienServer(int port) throws IOException {
+    public ChatVaBienServer(int port, InetSocketAddress mdpAddress) throws IOException {
         this.serverSocketChannel = ServerSocketChannel.open();
         this.serverSocketChannel.bind(new InetSocketAddress(port));
         this.serverSocketChannel.configureBlocking(false);
         this.selector = Selector.open();
         this.serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+        
+        this.mdpChannel = SocketChannel.open();
+        this.mdpChannel.configureBlocking(false);
+        this.mdpChannel.connect(mdpAddress);
+        this.mdpKey = mdpChannel.register(selector, SelectionKey.OP_CONNECT | SelectionKey.OP_READ);
     }
 
     public void launch() throws IOException {
@@ -61,6 +71,18 @@ public class ChatVaBienServer {
             while (iter.hasNext()) {
                 SelectionKey key = iter.next();
                 try {
+                	if (key.channel() == mdpChannel) {
+                	    if (key.isConnectable()) {
+                	        if (mdpChannel.finishConnect()) {
+                	            logger.info("Connecté à ServerMDP");
+                	        }
+                	    }
+                	    if (key.isReadable()) {
+                	        handleMDPResponse();
+                	    }
+                	    iter.remove();
+                	    continue;
+                	}
                     if (key.isValid() && key.isAcceptable()) {
                         doAccept(key);
                     }
@@ -107,9 +129,28 @@ public class ChatVaBienServer {
 
     private void silentlyClose(SelectionKey key) {
         try {
+        	var context = (Context) key.attachment();
+            if (context != null) {
+                context.logout();
+            }
             key.channel().close();
         } catch (IOException e) {
             // ignore
+        }
+    }
+    
+    private void handleMDPResponse() throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
+        int read = mdpChannel.read(buffer);
+        if (read == -1) throw new IOException("Connexion fermée par ServerMDP");
+        buffer.flip();
+        while (buffer.remaining() >= 9) { // 1 byte + 8 long
+            byte status = buffer.get();
+            long id = buffer.getLong();
+            Context ctx = pendingAuthRequests.remove(id);
+            if (ctx != null) {
+                ctx.onMDPResponse(status == 1, id);
+            }
         }
     }
 
@@ -206,6 +247,8 @@ public class ChatVaBienServer {
             	var newUser = new User(random.nextLong(), peusdo, sc, false);
                 loggedUsers.put(newUser.pseudo(), newUser);
                 sendLoginStatus(true);
+                Request request = new MessageRequest("Server", peusdo + " vient de se connecter.");
+                request.handle(this);
             }
         }
         
@@ -369,6 +412,31 @@ public class ChatVaBienServer {
             bb.put(accepted ? OPCODE.LOGIN_ACCEPTED.getCode() : OPCODE.LOGIN_REFUSED.getCode());
             bb.flip();
             queueMessage(bb);
+        }
+        
+        private void logout() {
+            if (peusdo != null) {
+                loggedUsers.remove(peusdo);
+                logger.info("Déconnexion de " + peusdo);
+                broadcastMessage("Server", peusdo + " s'est déconnecté.");
+            }
+        }
+        
+        public void onMDPResponse(boolean success, long id) {
+            // À adapter selon ce que tu veux faire après vérification
+            if (opcode == OPCODE.LOGINAUTH.getCode()) {
+                if (success) {
+                    handleLogin(); // valide
+                } else {
+                    sendLoginStatus(false);
+                }
+            } else if (opcode == OPCODE.LOGIN.getCode()) {
+                if (success) {
+                    sendLoginStatus(false); // login déjà enregistré, refuse
+                } else {
+                    handleLogin(); // accepte login
+                }
+            }
         }
 
         private void processIn() {
@@ -583,12 +651,17 @@ public class ChatVaBienServer {
     
 
     public static void main(String[] args) throws IOException {
-        if (args.length != 1) {
-            System.err.println("Usage: java ChatVaBienServer <port>");
+        if (args.length != 2) {
+            System.err.println("Usage: java ChatVaBienServer <serverPort> <mdpPort>");
             return;
         }
-        int port = Integer.parseInt(args[0]);
+
+        int serverPort = Integer.parseInt(args[0]);
+        int mdpPort = Integer.parseInt(args[1]);
+
+        InetSocketAddress mdpAddress = new InetSocketAddress("localhost", mdpPort);
         logger.log(Level.INFO, "Server launched");
-        new ChatVaBienServer(port).launch();
+
+        new ChatVaBienServer(serverPort, mdpAddress).launch();
     }
 }
