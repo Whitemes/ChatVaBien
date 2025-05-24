@@ -154,7 +154,7 @@ public class ChatVaBienServer {
         }
     }
 
-   class Context {
+   public class Context {
         private final SocketChannel sc;
         private final SelectionKey key;
         private final ByteBuffer bufferIn = ByteBuffer.allocate(MAX_BUFFER_SIZE);
