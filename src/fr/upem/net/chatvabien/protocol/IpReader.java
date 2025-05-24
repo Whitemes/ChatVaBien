@@ -6,12 +6,16 @@ import java.nio.ByteBuffer;
 
 public class IpReader implements Reader<Ip> {
 
-    private enum State { WAITING_TYPE, WAITING_ADDRESS, DONE, ERROR }
+    private enum State {WAITING_TYPE, WAITING_ADDRESS, WAITING_PORT, DONE, ERROR}
 
-    public State state = State.WAITING_TYPE;
+    private final ByteReader byteReader = new ByteReader();
+    private final IntReader portReader = new IntReader();
+
+    private State state = State.WAITING_TYPE;
     private byte ipType;
     private ByteBuffer ipBuffer;
     private InetAddress ip;
+    private int port;
 
     @Override
     public ProcessStatus process(ByteBuffer bb) {
@@ -21,10 +25,11 @@ public class IpReader implements Reader<Ip> {
 
         switch (state) {
             case WAITING_TYPE -> {
-                if (bb.remaining() < 1) {
-                    return ProcessStatus.REFILL;
+                var status = byteReader.process(bb);
+                if (status != ProcessStatus.DONE) {
+                    return status;
                 }
-                ipType = bb.get();
+                ipType = byteReader.get();
                 if (ipType == 0x04) {
                     ipBuffer = ByteBuffer.allocate(4);
                 } else if (ipType == 0x06) {
@@ -33,9 +38,7 @@ public class IpReader implements Reader<Ip> {
                     state = State.ERROR;
                     return ProcessStatus.ERROR;
                 }
-                
                 state = State.WAITING_ADDRESS;
-                System.out.println("State: " + state + ", bb.remaining: " + bb.remaining());
                 return ProcessStatus.REFILL;
             }
 
@@ -53,6 +56,16 @@ public class IpReader implements Reader<Ip> {
                     state = State.ERROR;
                     return ProcessStatus.ERROR;
                 }
+                state = State.WAITING_PORT;
+                return ProcessStatus.REFILL;
+            }
+
+            case WAITING_PORT -> {
+                var status = portReader.process(bb);
+                if (status != ProcessStatus.DONE) {
+                    return status;
+                }
+                port = portReader.get();
                 state = State.DONE;
                 return ProcessStatus.DONE;
             }
@@ -66,12 +79,14 @@ public class IpReader implements Reader<Ip> {
         if (state != State.DONE) {
             throw new IllegalStateException();
         }
-        return new Ip(ipType, ip);
+        return new Ip(ipType, ip, port);
     }
 
     @Override
     public void reset() {
         state = State.WAITING_TYPE;
+        byteReader.reset();
+        portReader.reset();
         ipBuffer = null;
         ip = null;
     }

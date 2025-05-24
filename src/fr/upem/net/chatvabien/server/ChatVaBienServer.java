@@ -154,7 +154,7 @@ public class ChatVaBienServer {
         }
     }
 
-    public class Context {
+   class Context {
         private final SocketChannel sc;
         private final SelectionKey key;
         private final ByteBuffer bufferIn = ByteBuffer.allocate(MAX_BUFFER_SIZE);
@@ -326,34 +326,33 @@ public class ChatVaBienServer {
         }
         
         private ByteBuffer encodeOKPrivateRequest() {
-        	var resquesterBytes = UTF8.encode(peusdo);
-        	var targetBytes = UTF8.encode(targetPeusdo);
-        	var ipBytes = UTF8.encode(clientIp.ip().toString());
-        	ByteBuffer socketBytes = null;
-			try {
-				socketBytes = UTF8.encode(sc.getLocalAddress().toString());
-			} catch (IOException e) {
-				logger.log(Level.SEVERE, "IO Exception");
-				throw new AssertionError();
-			}
-			
-        	ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + 
-        			Integer.BYTES + resquesterBytes.remaining() + 
-        			Integer.BYTES + targetBytes.remaining() +
-        			Byte.BYTES + socketBytes.remaining() +
-        			Long.BYTES);
-        	
-        	bb.put(OPCODE.OK_PRIVATE.getCode());
-        	bb.putInt(resquesterBytes.remaining());
-        	bb.put(resquesterBytes);
-        	bb.putInt(targetBytes.remaining());
-        	bb.put(targetBytes);
-        	bb.put(clientIp.version());
-        	bb.put(ipBytes);
-        	bb.putLong(token);
-        	bb.flip();
-        	return bb;
+            var requesterBytes = UTF8.encode(peusdo);
+            var targetBytes = UTF8.encode(targetPeusdo);
+
+            byte[] rawIp = clientIp.address().getAddress(); // 4 ou 16 bytes
+            byte ipType = clientIp.version();          // 0x04 ou 0x06
+            int port = clientIp.port();                // le port associé
+
+            ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + // opcode
+                    Integer.BYTES + requesterBytes.remaining() +
+                    Integer.BYTES + targetBytes.remaining() +
+                    Byte.BYTES + rawIp.length + // ipType + address
+                    Integer.BYTES +             // port
+                    Long.BYTES);                // token
+
+            bb.put(OPCODE.OK_PRIVATE.getCode());
+            bb.putInt(requesterBytes.remaining());
+            bb.put(requesterBytes);
+            bb.putInt(targetBytes.remaining());
+            bb.put(targetBytes);
+            bb.put(ipType);
+            bb.put(rawIp);
+            bb.putInt(port);
+            bb.putLong(token);
+            bb.flip();
+            return bb;
         }
+
         
         public void handleKOPrivateRequest() {
         	if(!loggedUsers.containsKey(peusdo)) {
@@ -441,23 +440,7 @@ public class ChatVaBienServer {
 
         private void processIn() {
         	for (;;) {
-        		System.out.println(ipReader.state + " " + state);
                 switch (state) {
-//	                case WAITING_TOTAL_SIZE -> {
-//	                	logger.info("\n\nBufferDEBUT : " + dumpBuffer(bufferIn));
-//	                    var status = intReader.process(bufferIn);
-//	                    if (status == ProcessStatus.DONE) {
-//	                        totalSize = intReader.get();
-//	                        logger.info("Total size reçu: " + totalSize);
-//	                        intReader.reset();
-//	                        state = State.WAITING_OPCODE;
-//	                    } else if (status == ProcessStatus.REFILL) {
-//	                        return;
-//	                    } else {
-//	                        closed = true;
-//	                        return;
-//	                    }
-//	                }
                     case WAITING_OPCODE -> {
                         var status = opcodeReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
@@ -491,7 +474,7 @@ public class ChatVaBienServer {
                         if (status == ProcessStatus.DONE) {
                             clientIp = ipReader.get();
                             ipReader.reset();
-                            logger.info("IP reçue: " + clientIp.ip());
+                            logger.info("IP reçue: " + clientIp.address().getHostAddress() + ":" + clientIp.port());
                             state = State.WAITING_ID;
                         } else if (status == ProcessStatus.REFILL) {
                             return;

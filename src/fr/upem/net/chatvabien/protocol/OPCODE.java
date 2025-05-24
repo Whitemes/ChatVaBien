@@ -1,19 +1,19 @@
 package fr.upem.net.chatvabien.protocol;
 
 public enum OPCODE {
-    LOGIN((byte) 0),
-    LOGINAUTH((byte) 1),
-    LOGIN_ACCEPTED((byte) 2),
-    LOGIN_REFUSED((byte) 3),
-    MESSAGE((byte) 4),
-    REQUEST_PRIVATE((byte) 5),
-    OK_PRIVATE((byte) 6),
-    KO_PRIVATE((byte) 7),
-    OPEN((byte) 8),
-    FILE((byte) 9),
-    NOPE((byte) 10),
-	GET_CONNECTED_USERS((byte) 11),
-	CONNECTED_USERS_LIST((byte) 12);
+    LOGIN((byte) 0x00),
+    LOGINAUTH((byte) 0x01),
+    LOGIN_ACCEPTED((byte) 0x02),
+    LOGIN_REFUSED((byte) 0x03),
+    MESSAGE((byte) 0x04),
+    REQUEST_PRIVATE((byte) 0x05),
+    OK_PRIVATE((byte) 0x06),
+    KO_PRIVATE((byte) 0x07),
+    OPEN((byte) 0x08),
+    FILE((byte) 0x09),
+    NOPE((byte) 0x10),
+	GET_CONNECTED_USERS((byte) 0x11),
+	CONNECTED_USERS_LIST((byte) 0x12);
 	
 	
 
