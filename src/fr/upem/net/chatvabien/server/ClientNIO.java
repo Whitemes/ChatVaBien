@@ -69,7 +69,8 @@ public class ClientNIO {
     private static void silentlyClose(SelectionKey key) {
         try {
             key.channel().close();
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            // ignore
         }
     }
 
