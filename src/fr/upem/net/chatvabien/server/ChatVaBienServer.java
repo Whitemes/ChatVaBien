@@ -312,10 +312,10 @@ public class ChatVaBienServer {
         	
         	logger.log(Level.INFO, "Requete privée acceptée reçue de " + peusdo + " à " + targetPeusdo);
         	
-        	User senderUser = loggedUsers.get(peusdo);
+        	User requesterUser = loggedUsers.get(targetPeusdo);
         	var request = encodeOKPrivateRequest();
         	
-        	SocketChannel userChannel = senderUser.sc();
+        	SocketChannel userChannel = requesterUser.sc();
             if (userChannel.isOpen()) {
                 SelectionKey userKey = userChannel.keyFor(selector);
                 if (userKey != null) {
@@ -366,10 +366,10 @@ public class ChatVaBienServer {
         	
         	logger.log(Level.INFO, "Requete privée refusée reçue de " + peusdo + " à " + targetPeusdo);
         	
-        	User senderUser = loggedUsers.get(peusdo);
+        	User requesterUser = loggedUsers.get(targetPeusdo);
         	var request = encodeKOPrivateRequest();
         	
-        	SocketChannel userChannel = senderUser.sc();
+        	SocketChannel userChannel = requesterUser.sc();
             if (userChannel.isOpen()) {
                 SelectionKey userKey = userChannel.keyFor(selector);
                 if (userKey != null) {
