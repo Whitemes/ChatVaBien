@@ -2,6 +2,7 @@ package fr.upem.net.chatvabien.server;
 
 import fr.upem.net.chatvabien.protocol.OPCODE;
 import fr.upem.net.chatvabien.protocol.PrivateRequest;
+import fr.upem.net.chatvabien.protocol.User;
 
 import java.io.*;
 import java.net.InetAddress;
@@ -24,6 +25,10 @@ public class ClientTest {
     private static SocketChannel MainSc;
     private static boolean isPrivateResquested = false;
     private static PrivateRequest pendingPrivateRequest = null;
+    private static SocketChannel privateSocket = null;
+    private static InetSocketAddress privateSocketAddress = null;
+    private static long privateToken = -1;
+    private static boolean privateSessionActive = false;
     
     private static final Scanner scanner = new Scanner(System.in); // Unique scanner utilisé partout
 
@@ -125,7 +130,45 @@ public class ClientTest {
 
                 pendingPrivateRequest = new PrivateRequest(sender, target);                
             }
-            case OK_PRIVATE -> System.out.println("La connexion privée a été acceptée par le destinataire.");
+            case OK_PRIVATE -> {
+            		System.out.println("La connexion privée a été acceptée par le destinataire.");
+            		// 1. Lire login_requester
+            	    int requesterLen = buffer.getInt();
+            	    byte[] requesterBytes = new byte[requesterLen];
+            	    buffer.get(requesterBytes);
+            	    String requester = UTF8.decode(ByteBuffer.wrap(requesterBytes)).toString();
+
+            	    // 2. Lire login_target
+            	    int targetLen = buffer.getInt();
+            	    byte[] targetBytes = new byte[targetLen];
+            	    buffer.get(targetBytes);
+            	    String target = UTF8.decode(ByteBuffer.wrap(targetBytes)).toString();
+
+            	    // 3. Lire ip_type + ip address
+            	    byte ipType = buffer.get(); // 0x04 ou 0x06
+            	    byte[] ipBytes = new byte[ipType == 0x04 ? 4 : 16];
+            	    buffer.get(ipBytes);
+            	    InetAddress ipAddress = InetAddress.getByAddress(ipBytes);
+
+            	    // 4. Lire port
+            	    int port = buffer.getInt();
+
+            	    // 5. Lire connect_id
+            	    long token = buffer.getLong();
+            	    InetSocketAddress privateAddress = new InetSocketAddress(ipAddress, port);
+            	    
+            	    privateSocketAddress = new InetSocketAddress(ipAddress, port);
+            	    privateToken = token;
+            	    
+            	    privateSocket = SocketChannel.open();
+            	    privateSocket.connect(privateSocketAddress);
+            	    privateSessionActive = true;
+
+            	    System.out.println("Connexion privée établie avec " + target);
+            	    System.out.println("Adresse : " + ipAddress.getHostAddress());
+            	    System.out.println("Port : " + port);
+            	    System.out.println("Token : " + token);
+            	}
             case KO_PRIVATE -> System.out.println("La connexion privée a été refusée par le destinataire.");
             case CONNECTED_USERS_LIST -> {
                 if (buffer.remaining() < Integer.BYTES) {
@@ -245,7 +288,8 @@ public class ClientTest {
                 } else if (line.startsWith("/")) {
                     System.out.println("Commande non prise en charge.");
                 } else {
-                    sendMessage(4, sc, OPCODE.MESSAGE.getCode(), id, line, peusdo, null);
+                	SocketChannel targetChannel = privateSessionActive ? privateSocket : MainSc;
+                    sendMessage(4, targetChannel, OPCODE.MESSAGE.getCode(), id, line, peusdo, null);
                 }
             }
 
