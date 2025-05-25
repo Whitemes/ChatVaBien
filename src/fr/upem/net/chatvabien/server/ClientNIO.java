@@ -12,17 +12,24 @@ public class ClientNIO {
     private static final String SERVER_ADDRESS = "localhost";
     private static final int SERVER_PORT = 7777;
     private static final int BUFFER_SIZE = 1024;
+    private static String USERNAME;
 
     public static void main(String[] args) throws IOException {
-        try(Selector selector = Selector.open();
-            SocketChannel sc = SocketChannel.open()) {
+        if (args.length < 1) {
+            System.out.println("Usage: java ClientNIO <login>");
+            return;
+        }
+
+        USERNAME = args[0];
+
+        try (Selector selector = Selector.open();
+             SocketChannel sc = SocketChannel.open()) {
+
             sc.configureBlocking(false);
             sc.connect(new InetSocketAddress(SERVER_ADDRESS, SERVER_PORT));
-
             SelectionKey key = sc.register(selector, SelectionKey.OP_CONNECT);
             key.attach(new Context(key));
 
-            // Thread pour lire la console
             new Thread(() -> {
                 Scanner scanner = new Scanner(System.in);
                 while (true) {
@@ -63,6 +70,8 @@ public class ClientNIO {
         if (sc.finishConnect()) {
             System.out.println("✅ Connecté au serveur.");
             key.interestOps(SelectionKey.OP_READ);
+            Context ctx = (Context) key.attachment();
+            ctx.login(USERNAME); // Envoi du LOGIN (-1)
         }
     }
 
@@ -74,7 +83,6 @@ public class ClientNIO {
         }
     }
 
-    // Classe interne pour gérer les buffers
     static private class Context {
         private final SelectionKey key;
         private final SocketChannel sc;
@@ -84,6 +92,16 @@ public class ClientNIO {
         Context(SelectionKey key) {
             this.key = key;
             this.sc = (SocketChannel) key.channel();
+        }
+
+        void login(String login) {
+            var encodedLogin = StandardCharsets.UTF_8.encode(login);
+            ByteBuffer bb = ByteBuffer.allocate(1 + Integer.BYTES + encodedLogin.remaining());
+            bb.put((byte) -1); // OPCODE LOGIN (-1)
+            bb.putInt(encodedLogin.remaining());
+            bb.put(encodedLogin);
+            bb.flip();
+            queueMessage(bb);
         }
 
         void sendLine(String line) {
@@ -99,18 +117,21 @@ public class ClientNIO {
                 return;
             }
             bufferIn.flip();
-            while (bufferIn.remaining() >= Integer.BYTES) {
-                bufferIn.mark();
-                int len = bufferIn.getInt();
-                if (bufferIn.remaining() < len) {
-                    bufferIn.reset();
-                    break;
+
+            while (bufferIn.remaining() >= 1) {
+                byte opcode = bufferIn.get();
+
+                switch (opcode) {
+                    case 1 -> System.out.println("✅ LOGIN_ACCEPTED");
+                    case 2 -> {
+                        System.out.println("❌ LOGIN_REFUSED");
+                        sc.close();
+                        return;
+                    }
+                    default -> System.out.println("📥 Opcode inconnu reçu: " + opcode);
                 }
-                byte[] msgBytes = new byte[len];
-                bufferIn.get(msgBytes);
-                String msg = new String(msgBytes, StandardCharsets.UTF_8);
-                System.out.println("📩 Message: " + msg);
             }
+
             bufferIn.compact();
         }
 
@@ -118,6 +139,11 @@ public class ClientNIO {
             bufferOut.flip();
             sc.write(bufferOut);
             bufferOut.compact();
+            updateInterestOps();
+        }
+
+        void queueMessage(ByteBuffer bb) {
+            bufferOut.put(bb);
             updateInterestOps();
         }
 
