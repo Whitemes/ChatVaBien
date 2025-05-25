@@ -16,6 +16,7 @@ public class ClientNIO {
     private static final int BUFFER_SIZE = 1024;
     private static String USERNAME;
 
+
     public static void main(String[] args) throws IOException {
         if (args.length < 1) {
             System.out.println("Usage: java ClientNIO <login>");
@@ -90,6 +91,7 @@ public class ClientNIO {
         private final SocketChannel sc;
         private final ByteBuffer bufferIn = ByteBuffer.allocate(BUFFER_SIZE);
         private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
+        private String pseudo;
 
         Context(SelectionKey key) {
             this.key = key;
@@ -97,6 +99,7 @@ public class ClientNIO {
         }
 
         void login(String login) {
+            this.pseudo = login;
             var encodedLogin = StandardCharsets.UTF_8.encode(login);
             ByteBuffer bb = ByteBuffer.allocate(1 + Integer.BYTES + encodedLogin.remaining());
             bb.put(OPCODE.LOGIN.getCode()); // OPCODE LOGIN (-1)
@@ -107,10 +110,13 @@ public class ClientNIO {
         }
 
         void sendLine(String line) {
-            var encoded = StandardCharsets.UTF_8.encode(line);
-            bufferOut.putInt(encoded.remaining());
-            bufferOut.put(encoded);
-            updateInterestOps();
+            if (line.isEmpty() || pseudo == null) {
+                System.out.println("⛔ pseudo == null ou message vide");
+                return;
+            }
+            System.out.println("SENDING FROM: " + pseudo + " → " + line);
+            ByteBuffer bb = buildMessagePacket(pseudo, line);
+            queueMessage(bb);
         }
 
         void doRead() throws IOException {
@@ -206,5 +212,20 @@ public class ClientNIO {
             }
             key.interestOps(ops);
         }
+
+        private ByteBuffer buildMessagePacket(String sender, String message) {
+            var loginBytes = StandardCharsets.UTF_8.encode(sender);
+            var messageBytes = StandardCharsets.UTF_8.encode(message);
+
+            ByteBuffer bb = ByteBuffer.allocate(1 + Integer.BYTES + loginBytes.remaining() + Integer.BYTES + messageBytes.remaining());
+            bb.put(OPCODE.MESSAGE.getCode()); // OPCODE = 0x04
+            bb.putInt(loginBytes.remaining());
+            bb.put(loginBytes);
+            bb.putInt(messageBytes.remaining());
+            bb.put(messageBytes);
+            bb.flip();
+            return bb;
+        }
+
     }
 }

@@ -441,13 +441,43 @@ public class ChatVaBienServer {
         private void processIn() {
         	for (;;) {
                 switch (state) {
+//                    case WAITING_OPCODE -> {
+//                        var status = opcodeReader.process(bufferIn);
+//                        if (status == ProcessStatus.DONE) {
+//                            opcode = opcodeReader.get();
+//                            logger.info("Opcode reçu: " + opcode);
+//                            opcodeReader.reset();
+//                            state = State.WAITING_PEUSDO;
+//                        } else if (status == ProcessStatus.REFILL) {
+//                            return;
+//                        } else {
+//                            closed = true;
+//                            return;
+//                        }
+//                    }
                     case WAITING_OPCODE -> {
                         var status = opcodeReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
                             opcode = opcodeReader.get();
-                            logger.info("Opcode reçu: " + opcode);
-                            opcodeReader.reset();                           
-                            state = State.WAITING_PEUSDO;
+                            logger.info("🔎 Opcode reçu: " + opcode + " (hex: 0x" + String.format("%02X", opcode) + ")");
+                            opcodeReader.reset();
+
+                            if (opcode == OPCODE.MESSAGE.getCode()) {
+                                logger.info("✅ Message détecté, passage à WAITING_PEUSDO");
+                                state = State.WAITING_PEUSDO;
+                            } else if (opcode == OPCODE.LOGIN.getCode() || opcode == OPCODE.LOGINAUTH.getCode()) {
+                                logger.info("✅ Login détecté, passage à WAITING_PEUSDO");
+                                state = State.WAITING_PEUSDO;
+                            } else if (opcode == OPCODE.REQUEST_PRIVATE.getCode() ||
+                                    opcode == OPCODE.OK_PRIVATE.getCode() ||
+                                    opcode == OPCODE.KO_PRIVATE.getCode()) {
+                                state = State.WAITING_PEUSDO;
+                            } else if (opcode == OPCODE.GET_CONNECTED_USERS.getCode()) {
+                                state = State.DONE;
+                            } else {
+                                logger.warning("❌ Opcode inconnu: " + opcode);
+                                state = State.ERROR;
+                            }
                         } else if (status == ProcessStatus.REFILL) {
                             return;
                         } else {
@@ -455,6 +485,8 @@ public class ChatVaBienServer {
                             return;
                         }
                     }
+
+
                     case WAITING_ID -> {
                         var status = idReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
@@ -483,28 +515,65 @@ public class ChatVaBienServer {
                             return;
                         }
                     }
+//                    case WAITING_PEUSDO -> {
+//                        var status = stringReader.process(bufferIn);
+//                        if (status == ProcessStatus.DONE) {
+//                        	peusdo = stringReader.get();
+//                            stringReader.reset();
+//                            logger.info("Peusdo reçu: " + peusdo);
+//                            if (opcode == OPCODE.MESSAGE.getCode()) {
+//                                state = State.WAITING_MESSAGE;
+//                            }
+//                            else if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.OK_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
+//                            	state = State.WAITING_TARGET_PEUSDO;
+//                            }
+//                           else {
+//                                state = State.DONE;
+//                            }
+//                        } else if (status == ProcessStatus.REFILL) {
+//                            return;
+//                        } else {
+//                            closed = true;
+//                            return;
+//                        }
+//                    }
                     case WAITING_PEUSDO -> {
                         var status = stringReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
-                        	peusdo = stringReader.get();
+                            peusdo = stringReader.get();
                             stringReader.reset();
-                            logger.info("Peusdo reçu: " + peusdo);
-                            if (opcode == OPCODE.MESSAGE.getCode()) {
-                                state = State.WAITING_MESSAGE;
-                            } 
-                            else if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.OK_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
-                            	state = State.WAITING_TARGET_PEUSDO;
+                            logger.info("🧾 Peusdo reçu: " + peusdo);
+                            OPCODE decoded = OPCODE.fromCode(opcode);
+                            if (decoded == null) {
+                                System.out.println("📥 Opcode inconnu (null): " + opcode);
+                                return;
                             }
-                           else {
-                                state = State.DONE;
+                            switch (decoded) {
+                                case MESSAGE -> {
+                                    state = State.WAITING_MESSAGE; // Lecture du message public
+                                    logger.info("➡️ Passage à WAITING_MESSAGE");
+                                }
+                                case REQUEST_PRIVATE, OK_PRIVATE, KO_PRIVATE -> {
+                                    state = State.WAITING_TARGET_PEUSDO; // Besoin d’un deuxième pseudo
+                                    logger.info("➡️ Passage à WAITING_TARGET_PEUSDO");
+                                }
+                                case LOGIN, LOGINAUTH -> {
+                                    state = State.DONE; // Pas besoin d’autres champs
+                                    logger.info("➡️ Passage à DONE (login)");
+                                }
+                                default -> {
+                                    logger.warning("❌ Opcode inattendu après WAITING_PEUSDO: " + opcode);
+                                    state = State.ERROR;
+                                }
                             }
+
                         } else if (status == ProcessStatus.REFILL) {
                             return;
                         } else {
                             closed = true;
-                            return;
                         }
                     }
+
                     case WAITING_TARGET_PEUSDO -> {
                         var status = stringReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
@@ -529,7 +598,7 @@ public class ChatVaBienServer {
                         if (status == ProcessStatus.DONE) {
                             message = stringReader.get();
                             stringReader.reset();
-                            logger.info("Message reçu: " + message);
+                            logger.info("📝 Message reçu: " + message);
                             state = State.DONE;
                         } else if (status == ProcessStatus.REFILL) {
                             return;
@@ -540,7 +609,12 @@ public class ChatVaBienServer {
                     }
                     case DONE -> {
                     	logger.info("Opcode: " + opcode);
-	                    Request request = switch (OPCODE.fromCode(opcode)) {
+                        OPCODE decoded = OPCODE.fromCode(opcode);
+                        if (decoded == null) {
+                            System.out.println("📥 Opcode inconnu (null): " + opcode);
+                            return;
+                        }
+	                    Request request = switch (decoded) {
 	                        case LOGIN -> new LoginRequest();
 	                        case MESSAGE -> new MessageRequest(peusdo, message);
 	                        case GET_CONNECTED_USERS -> new GetUsersRequest();
@@ -551,6 +625,7 @@ public class ChatVaBienServer {
 	                    };
 	
 	                    if (request != null) {
+                            logger.info("✅ Exécution de handle() pour : " + request.getClass().getSimpleName());
 	                        request.handle(this);
 	                    } else {
 	                        logger.warning("Unknown or unhandled opcode");
