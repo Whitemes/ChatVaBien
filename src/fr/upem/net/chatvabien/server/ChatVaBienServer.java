@@ -144,7 +144,7 @@ public class ChatVaBienServer {
         int read = mdpChannel.read(buffer);
         if (read == -1) throw new IOException("Connexion fermée par ServerMDP");
         buffer.flip();
-        while (buffer.remaining() >= 9) { // 1 byte + 8 long
+        while (buffer.remaining() >= 9) {
             byte status = buffer.get();
             long id = buffer.getLong();
             Context ctx = pendingAuthRequests.remove(id);
@@ -329,16 +329,16 @@ public class ChatVaBienServer {
             var requesterBytes = UTF8.encode(peusdo);
             var targetBytes = UTF8.encode(targetPeusdo);
 
-            byte[] rawIp = clientIp.address().getAddress(); // 4 ou 16 bytes
-            byte ipType = clientIp.version();          // 0x04 ou 0x06
-            int port = clientIp.port();                // le port associé
+            byte[] rawIp = clientIp.address().getAddress();
+            byte ipType = clientIp.version();
+            int port = clientIp.port();
 
-            ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + // opcode
+            ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES +
                     Integer.BYTES + requesterBytes.remaining() +
                     Integer.BYTES + targetBytes.remaining() +
-                    Byte.BYTES + rawIp.length + // ipType + address
-                    Integer.BYTES +             // port
-                    Long.BYTES);                // token
+                    Byte.BYTES + rawIp.length +
+                    Integer.BYTES +
+                    Long.BYTES);
 
             bb.put(OPCODE.OK_PRIVATE.getCode());
             bb.putInt(requesterBytes.remaining());
