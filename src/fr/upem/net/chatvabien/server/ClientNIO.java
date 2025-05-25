@@ -1,5 +1,7 @@
 package fr.upem.net.chatvabien.server;
 
+import fr.upem.net.chatvabien.protocol.OPCODE;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
@@ -97,7 +99,7 @@ public class ClientNIO {
         void login(String login) {
             var encodedLogin = StandardCharsets.UTF_8.encode(login);
             ByteBuffer bb = ByteBuffer.allocate(1 + Integer.BYTES + encodedLogin.remaining());
-            bb.put((byte) -1); // OPCODE LOGIN (-1)
+            bb.put(OPCODE.LOGIN.getCode()); // OPCODE LOGIN (-1)
             bb.putInt(encodedLogin.remaining());
             bb.put(encodedLogin);
             bb.flip();
@@ -116,23 +118,73 @@ public class ClientNIO {
                 sc.close();
                 return;
             }
+//            bufferIn.flip();
+//
+//            while (bufferIn.remaining() >= 1) {
+//                byte opcode = bufferIn.get();
+//
+//                switch (opcode) {
+//                    case 0x02 -> System.out.println("✅ LOGIN_ACCEPTED");
+//                    case 0x03 -> {
+//                        System.out.println("❌ LOGIN_REFUSED");
+//                        sc.close();
+//                        return;
+//                    }
+//                    default -> System.out.println("📥 Opcode inconnu reçu: " + opcode);
+//                }
+//            }
+//
+//            bufferIn.compact();
+
             bufferIn.flip();
 
             while (bufferIn.remaining() >= 1) {
                 byte opcode = bufferIn.get();
+                OPCODE decoded = OPCODE.fromCode(opcode);
+                if (decoded == null) {
+                    System.out.println("📥 Opcode inconnu (null): " + opcode);
+                    return;
+                }
 
-                switch (opcode) {
-                    case 1 -> System.out.println("✅ LOGIN_ACCEPTED");
-                    case 2 -> {
+                switch (decoded) {
+                    case LOGIN_ACCEPTED -> System.out.println("✅ LOGIN_ACCEPTED");
+                    case LOGIN_REFUSED -> {
                         System.out.println("❌ LOGIN_REFUSED");
                         sc.close();
                         return;
+                    }
+                    case MESSAGE -> {
+                        if (bufferIn.remaining() < Integer.BYTES) {
+                            bufferIn.position(bufferIn.position() - 1); // rollback
+                            break;
+                        }
+                        bufferIn.mark();
+                        int loginLen = bufferIn.getInt();
+                        if (bufferIn.remaining() < loginLen + Integer.BYTES) {
+                            bufferIn.reset();
+                            break;
+                        }
+                        byte[] loginBytes = new byte[loginLen];
+                        bufferIn.get(loginBytes);
+                        String login = new String(loginBytes, StandardCharsets.UTF_8);
+
+                        int msgLen = bufferIn.getInt();
+                        if (bufferIn.remaining() < msgLen) {
+                            bufferIn.reset();
+                            break;
+                        }
+                        byte[] msgBytes = new byte[msgLen];
+                        bufferIn.get(msgBytes);
+                        String msg = new String(msgBytes, StandardCharsets.UTF_8);
+
+                        System.out.println("📩 [" + login + "] " + msg);
                     }
                     default -> System.out.println("📥 Opcode inconnu reçu: " + opcode);
                 }
             }
 
             bufferIn.compact();
+
         }
 
         void doWrite() throws IOException {
