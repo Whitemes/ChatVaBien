@@ -1,8 +1,11 @@
 package fr.upem.net.chatvabien.server;
 
+import fr.upem.net.chatvabien.protocol.LongReader;
+import fr.upem.net.chatvabien.protocol.StringReader;
 import fr.upem.net.chatvabien.protocol.OPCODE;
 import fr.upem.net.chatvabien.protocol.PrivateRequest;
 import fr.upem.net.chatvabien.protocol.User;
+import fr.upem.net.chatvabien.protocol.Reader.ProcessStatus;
 
 import java.io.*;
 import java.net.InetAddress;
@@ -18,6 +21,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -28,46 +32,52 @@ public class ClientTest {
     private static final Charset UTF8 = Charset.forName("UTF8");
     private static final int MAX_BUFFER_SIZE = 1024;
 	private static final Logger logger = Logger.getLogger(ClientTest.class.getName());
-    private static String peusdo;
-    private static String fileDirectory;
-    private static SocketChannel MainSc;
-    private static boolean isPrivateResquested = false;
-    private static PrivateRequest pendingPrivateRequest = null;
-    private static SocketChannel privateSocket = null;
-    private static InetSocketAddress privateSocketAddress = null;
-    private static long privateToken = -1;
-    private static boolean privateSessionActive = false;
-    private static int privatePort = -1;
-    private static ServerSocketChannel privateServer = null;
-    private static Selector privateSelector = null;
-    private static long expectedIncomingToken = -1;
-    private static PrivateContext activePrivateContext = null;
-    private static boolean isSendingFile = false;
-    static FileOutputStream currentFileOut = null;
-    static String currentFileName = null;
-    static int expectedFileSize = 0;
-    static int receivedBytes = 0;
+    private String peusdo;
+    private String fileDirectory;
+    private SocketChannel MainSc;
+    private boolean isPrivateResquested = false;
+    private PrivateRequest pendingPrivateRequest = null;
+    private SocketChannel privateSocket = null;
+    private InetSocketAddress privateSocketAddress = null;
+    private long privateToken = -1;
+    private boolean privateSessionActive = false;
+    private int privatePort = -1;
+    private ServerSocketChannel privateServer = null;
+    private Selector privateSelector = null;
+    private long expectedIncomingToken = -1;
+    private PrivateContext activePrivateContext = null;
+    private  boolean isSendingFile = false;
+    FileOutputStream currentFileOut = null;
+    String currentFileName = null;
+    int expectedFileSize = 0;
+    int receivedBytes = 0;
     private static String privateTargetPeusdo = null;
-    private static boolean hasInitiatedPrivateRequest = false;
-    private static boolean hasOpenedPrivateSocket = false;
+    private boolean hasInitiatedPrivateRequest = false;
+    private boolean hasOpenedPrivateSocket = false;
+    private static Selector mainSelector;
+    private final ArrayBlockingQueue<String> commandQueue = new ArrayBlockingQueue<>(100);
+    private PrivateRequest pendingPrompt = null; // requête en attente d'une réponse utilisateur
+    private boolean waitingForPrivateReply = false;
     
     
     private static final Scanner scanner = new Scanner(System.in);
     private static final Map<SelectionKey, PrivateContext> privateContexts = new HashMap<>();
     
-   private static class PrivateContext {
+   private class PrivateContext {
         final SocketChannel sc;
         final ByteBuffer bufferIn = ByteBuffer.allocate(1024);
+        private final LongReader longReader = new LongReader();
+        private final StringReader senderReader = new StringReader();
+        private final StringReader messageReader = new StringReader();
 
         enum State { WAITING_OPCODE, WAITING_OPEN, WAITING_MESSAGE, WAITING_FILE }
         State state = State.WAITING_OPCODE;
 
-        byte currentOpcode;
+        OPCODE currentOpcode;
         long expectedToken;
         
         private final String fileDirectory;
 
-        // pour les cas où tu veux parser plus loin
         String sender;
         int expectedLength = -1;
 
@@ -86,119 +96,127 @@ public class ClientTest {
                 return false;
             }
             bufferIn.flip();
+
             while (bufferIn.hasRemaining()) {
                 switch (state) {
-	                case WAITING_OPCODE -> {
-	                    if (bufferIn.remaining() < 1) {
-	                        bufferIn.compact();
-	                        return true;
-	                    }
-	                    currentOpcode = bufferIn.get();
-	                    if (currentOpcode == OPCODE.OPEN.getCode()) {
-	                        state = State.WAITING_OPEN;
-	                    } else if (currentOpcode == OPCODE.MESSAGE.getCode()) {
-	                        state = State.WAITING_MESSAGE;
-	                    } else if (currentOpcode == OPCODE.FILE.getCode()) {
-	                        state = State.WAITING_FILE;
-	                    } else {
-	                        System.out.println("Opcode inconnu en privé : " + currentOpcode);
-	                        return false;
-	                    }
-	                }
-                    case WAITING_OPEN -> {
-                        if (bufferIn.remaining() < Long.BYTES) {
+                    case WAITING_OPCODE -> {
+                        if (bufferIn.remaining() < 1) {
                             bufferIn.compact();
                             return true;
                         }
-                        long tokenReceived = bufferIn.getLong();
-                        if (tokenReceived == expectedToken) {
-                            System.out.println("Connexion privée confirmée !");
-                            activePrivateContext = this;
-                            privateSessionActive = true;
-                        } else {
+                        currentOpcode = OPCODE.fromCode(bufferIn.get());
+                        switch (currentOpcode) {
+                            case OPEN -> state = State.WAITING_OPEN;
+                            case MESSAGE -> state = State.WAITING_MESSAGE;
+                            case FILE -> state = State.WAITING_FILE;
+                            default -> {
+                                System.out.println("Opcode inconnu en privé : " + currentOpcode);
+                                return false;
+                            }
+                        }
+                    }
+
+                    case WAITING_OPEN -> {
+                        ProcessStatus status = longReader.process(bufferIn);
+                        if (status == ProcessStatus.REFILL) {
+                            bufferIn.compact();
+                            return true;
+                        }
+                        if (status == ProcessStatus.ERROR) {
+                            System.out.println("Erreur lors de la lecture du token.");
+                            return false;
+                        }
+                        long tokenReceived = longReader.get();
+                        longReader.reset();
+                        if (tokenReceived != expectedToken) {
                             System.out.println("Connexion privée refusée (token invalide).");
                             return false;
                         }
+                        System.out.println("Connexion privée confirmée !");
+                        activePrivateContext = this;
+                        privateSessionActive = true;
                         state = State.WAITING_OPCODE;
                     }
-
 
                     case WAITING_MESSAGE -> {
-                        if (bufferIn.remaining() < Integer.BYTES) {
+                        var status = senderReader.process(bufferIn);
+                        if (status == ProcessStatus.DONE) {
+                            sender = senderReader.get();
+                            senderReader.reset();
+                            state = State.WAITING_MESSAGE; // continue to message reading
+                        } else {
                             bufferIn.compact();
                             return true;
                         }
-                        int senderLen = bufferIn.getInt();
-                        if (bufferIn.remaining() < senderLen + Integer.BYTES) {
-                            bufferIn.position(bufferIn.position() - Integer.BYTES);
-                            bufferIn.compact();
-                            return true;
-                        }
-                        byte[] senderBytes = new byte[senderLen];
-                        bufferIn.get(senderBytes);
-                        sender = UTF8.decode(ByteBuffer.wrap(senderBytes)).toString();
 
-                        int msgLen = bufferIn.getInt();
-                        if (bufferIn.remaining() < msgLen) {
-                            bufferIn.position(bufferIn.position() - Integer.BYTES - senderLen);
+                        status = messageReader.process(bufferIn);
+                        if (status == ProcessStatus.DONE) {
+                            String message = messageReader.get();
+                            messageReader.reset();
+                            System.out.println(sender + " (privé) : " + message);
+                            state = State.WAITING_OPCODE;
+                        } else {
                             bufferIn.compact();
-                            return true;
                         }
-                        byte[] msgBytes = new byte[msgLen];
-                        bufferIn.get(msgBytes);
-                        String msg = UTF8.decode(ByteBuffer.wrap(msgBytes)).toString();
-
-                        System.out.println(sender + " (privé) : " + msg);
-                        state = State.WAITING_OPCODE;
+                        return true;
                     }
+
                     case WAITING_FILE -> {
+                        // Vérifie si on peut lire la longueur du nom de fichier
                         if (bufferIn.remaining() < Integer.BYTES) {
                             bufferIn.compact();
                             return true;
                         }
 
-                        int filenameLen = bufferIn.getInt();
+                        // Lit la longueur du nom de fichier sans reset()
+                        int filenameLen = bufferIn.get();
                         if (bufferIn.remaining() < filenameLen + Integer.BYTES * 2) {
-                            bufferIn.position(bufferIn.position() - Integer.BYTES);
+                            bufferIn.position(bufferIn.position() - 1); // annule la lecture de filenameLen
                             bufferIn.compact();
                             return true;
                         }
 
-                        byte[] filenameBytes = new byte[filenameLen];
-                        bufferIn.get(filenameBytes);
-                        String filename = UTF8.decode(ByteBuffer.wrap(filenameBytes)).toString();
+                        // Lecture du nom de fichier
+                        ByteBuffer filenameBuf = ByteBuffer.allocate(filenameLen);
+                        for (int i = 0; i < filenameLen; i++) {
+                            filenameBuf.put(bufferIn.get());
+                        }
+                        filenameBuf.flip();
+                        String filename = UTF8.decode(filenameBuf).toString();
+
+                        // Lecture taille totale et taille du chunk
+                        if (bufferIn.remaining() < Integer.BYTES * 2) {
+                            // rollback: on replace le buffer à l’état avant filenameLen
+                            bufferIn.position(bufferIn.position() - filenameLen - 1);
+                            bufferIn.compact();
+                            return true;
+                        }
 
                         int totalSize = bufferIn.getInt();
                         int chunkSize = bufferIn.getInt();
 
                         if (bufferIn.remaining() < chunkSize) {
-                            bufferIn.position(bufferIn.position() - filenameLen - Integer.BYTES * 2);
+                            bufferIn.position(bufferIn.position() - filenameLen - 1 - Integer.BYTES * 2);
                             bufferIn.compact();
                             return true;
                         }
 
-                        byte[] chunk = new byte[chunkSize];
-                        bufferIn.get(chunk);
+                        // Prépare chunk direct
+                        ByteBuffer chunk = bufferIn.slice();
+                        chunk.limit(chunkSize);
+                        bufferIn.position(bufferIn.position() + chunkSize);
 
+                        // Nouveau fichier ?
                         if (!filename.equals(currentFileName)) {
-                            if (currentFileOut != null) {
-                                currentFileOut.close();
-                            }
+                            if (currentFileOut != null) currentFileOut.close();
                             if (filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
                                 System.err.println("Nom de fichier invalide reçu : " + filename);
-                                return false;
-                            }
-                            System.out.println("Réception d’un fichier nommé : " + filename);
-                            System.out.println("Chemin complet : " + fileDirectory + "/" + filename);
-
-                            if (filename == null || filename.isBlank() || filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
-                                System.err.println("Nom de fichier invalide : " + filename);
                                 return false;
                             }
 
                             File dir = new File(fileDirectory);
                             if (!dir.exists() || !dir.isDirectory()) {
-                                System.err.println("Dossier introuvable ou invalide : " + fileDirectory);
+                                System.err.println("Dossier invalide : " + fileDirectory);
                                 return false;
                             }
 
@@ -207,11 +225,16 @@ public class ClientTest {
                             currentFileName = filename;
                             expectedFileSize = totalSize;
                             receivedBytes = 0;
+
+                            System.out.println("Réception d’un fichier nommé : " + filename);
+                            System.out.println("Chemin complet : " + fileDirectory + "/" + filename);
                         }
 
-                        currentFileOut.write(chunk);
-                        receivedBytes += chunkSize;
+                        while (chunk.hasRemaining()) {
+                            currentFileOut.getChannel().write(chunk);
+                        }
 
+                        receivedBytes += chunkSize;
                         System.out.println("Chunk reçu (" + chunkSize + " octets) pour : " + filename);
 
                         if (receivedBytes >= expectedFileSize) {
@@ -225,12 +248,13 @@ public class ClientTest {
                     }
                 }
             }
+
             bufferIn.compact();
             return true;
         }
     }
 
-   private static void doPrivateAccept(SelectionKey key) throws IOException {
+   private void doPrivateAccept(SelectionKey key) throws IOException {
 	   SocketChannel scPrivate = privateServer.accept();
 	   if (scPrivate != null) {
 	       logger.info("Nouvelle connexion privée entrante acceptée.");
@@ -248,7 +272,7 @@ public class ClientTest {
 
 
 
-    private static void doPrivateRead(SelectionKey key) throws IOException {
+    private void doPrivateRead(SelectionKey key) throws IOException {
         PrivateContext ctx = privateContexts.get(key);
         if (ctx == null) return;
 
@@ -262,7 +286,7 @@ public class ClientTest {
         // no-op pour maintenant, sauf si tu veux envoyer un message plus tard depuis ici
     }
     
-    public static void handlePrivateSelectorEvents() throws IOException {
+    public void handlePrivateSelectorEvents() throws IOException {
         if (privateSelector.selectNow() > 0) {
             var iter = privateSelector.selectedKeys().iterator();
             while (iter.hasNext()) {
@@ -292,40 +316,55 @@ public class ClientTest {
         privateContexts.remove(key);
     }
 
-    private static void sendMessage(int version, SocketChannel sc, byte opcode, long id, String message, String peusdo, String target_peusdo) throws IOException {
-        ByteBuffer encodedMessage = null;
-        var encodedPeusdo = StandardCharsets.UTF_8.encode(peusdo);
-
-        InetAddress inetAddress = sc.socket().getLocalAddress();
-        byte[] ipBytes = inetAddress.getAddress();
-        int port = (opcode == OPCODE.OK_PRIVATE.getCode()) ? privatePort : sc.socket().getLocalPort();
-
-        if (!message.isEmpty()) {
-            encodedMessage = StandardCharsets.UTF_8.encode(message);
-        }
-
+    
+    
+    private void sendLoginMessage(SocketChannel sc, byte opcode, long id, String peusdo) throws IOException {
+        ByteBuffer pseudoBuf = UTF8.encode(peusdo);
         ByteBuffer bb = ByteBuffer.allocate(1024);
         bb.put(opcode);
-        bb.putInt(encodedPeusdo.remaining());
-        bb.put(encodedPeusdo);
+        bb.putInt(pseudoBuf.remaining());
+        bb.put(pseudoBuf);
 
-        if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.OK_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
-            var encodedTargetPeusdo = StandardCharsets.UTF_8.encode(target_peusdo);
-            bb.putInt(encodedTargetPeusdo.remaining());
-            bb.put(encodedTargetPeusdo);
+        bb.flip();
+        while (bb.hasRemaining()) {
+            sc.write(bb);
         }
+    }
+    
+    private void sendRequestPrivateMessage(SocketChannel sc, String peusdo, String target) throws IOException {
+        ByteBuffer pseudoBuf = UTF8.encode(peusdo);
+        ByteBuffer targetBuf = UTF8.encode(target);
 
-        if (opcode == OPCODE.OK_PRIVATE.getCode()) {
-            bb.put((byte) version);
-            bb.put(ipBytes);
-            bb.putInt(port);
-            bb.putLong(id);
-        }
+        ByteBuffer bb = ByteBuffer.allocate(1024);
+        bb.put(OPCODE.REQUEST_PRIVATE.getCode());
+        bb.putInt(pseudoBuf.remaining());
+        bb.put(pseudoBuf);
+        bb.putInt(targetBuf.remaining());
+        bb.put(targetBuf);
 
-        if (encodedMessage != null) {
-            bb.putInt(encodedMessage.remaining());
-            bb.put(encodedMessage);
+        bb.flip();
+        while (bb.hasRemaining()) {
+            sc.write(bb);
         }
+    }
+    
+    private void sendOKPrivateMessage(SocketChannel sc, int version, long token, String peusdo, String target, SocketChannel ip, int port) throws IOException {
+        ByteBuffer pseudoBuf = UTF8.encode(peusdo);
+        ByteBuffer targetBuf = UTF8.encode(target);
+        InetAddress inetAddress = ip.getLocalAddress();
+        byte[] ipBytes = inetAddress.getAddress(); // te donne directement la bonne taille
+        byte ipType = (byte) ipBytes.length;
+
+        ByteBuffer bb = ByteBuffer.allocate(1024);
+        bb.put(OPCODE.OK_PRIVATE.getCode());
+        bb.putInt(pseudoBuf.remaining());
+        bb.put(pseudoBuf);
+        bb.putInt(targetBuf.remaining());
+        bb.put(targetBuf);
+        bb.put((byte) version);
+        bb.put(ipBuf);
+        bb.putInt(port);
+        bb.putLong(token);
 
         bb.flip();
         while (bb.hasRemaining()) {
@@ -333,29 +372,43 @@ public class ClientTest {
         }
     }
 
-    private static void startReceiver(SocketChannel sc) {
-        new Thread(() -> {
-            ByteBuffer buffer = ByteBuffer.allocate(1024 * 8);
-            try {
-                while (true) {
-                    buffer.clear();
-                    int read = sc.read(buffer);
-                    if (read == -1) {
-                        System.out.println("Serveur a fermé la connexion.");
-                        break;
-                    }
-                    buffer.flip();
-                    if (buffer.hasRemaining()) {
-                        decodeMessage(buffer);
-                    }
-                }
-            } catch (IOException e) {
-                System.err.println("Erreur de lecture : " + e.getMessage());
-            }
-        }).start();
+    private void sendKOPrivateMessage(SocketChannel sc, String peusdo, String target) throws IOException {
+        ByteBuffer pseudoBuf = UTF8.encode(peusdo);
+        ByteBuffer targetBuf = UTF8.encode(target);
+
+        ByteBuffer bb = ByteBuffer.allocate(1024);
+        bb.put(OPCODE.KO_PRIVATE.getCode());
+        bb.putInt(pseudoBuf.remaining());
+        bb.put(pseudoBuf);
+        bb.putInt(targetBuf.remaining());
+        bb.put(targetBuf);
+
+        bb.flip();
+        while (bb.hasRemaining()) {
+            sc.write(bb);
+        }
     }
 
-    private static void decodeMessage(ByteBuffer buffer) throws IOException {
+    private void sendTextMessage(SocketChannel sc, String peusdo, String message) throws IOException {
+        ByteBuffer pseudoBuf = UTF8.encode(peusdo);
+        ByteBuffer msgBuf = UTF8.encode(message);
+
+        ByteBuffer bb = ByteBuffer.allocate(1024);
+        bb.put(OPCODE.MESSAGE.getCode());
+        bb.putInt(pseudoBuf.remaining());
+        bb.put(pseudoBuf);
+        bb.putInt(msgBuf.remaining());
+        bb.put(msgBuf);
+
+        bb.flip();
+        while (bb.hasRemaining()) {
+            sc.write(bb);
+        }
+    }
+
+    
+
+    private void decodeMessage(ByteBuffer buffer) throws IOException {
         if (!buffer.hasRemaining()) {
             System.out.println("Message vide.");
             return;
@@ -409,16 +462,17 @@ public class ClientTest {
                 buffer.get(targetBytes);
                 String target = UTF8.decode(ByteBuffer.wrap(targetBytes)).toString();
 
-                // 3. Lire ip_type + ip address
                 byte ipType = buffer.get();
-                byte[] ipBytes = new byte[ipType == 0x04 ? 4 : 16];
+                int ipLength = switch (ipType) {
+                    case 0x04 -> 4;
+                    case 0x06, 0x10 -> 16;
+                    default -> throw new IllegalArgumentException("Type IP inconnu: " + ipType);
+                };
+                byte[] ipBytes = new byte[ipLength];
                 buffer.get(ipBytes);
                 InetAddress ipAddress = InetAddress.getByAddress(ipBytes);
 
-                // 4. Lire port
                 int port = buffer.getInt();
-
-                // 5. Lire token
                 long token = buffer.getLong();
 
                 // Si je suis le target (et donc je n’ai pas ouvert de socket moi-même)
@@ -491,23 +545,21 @@ public class ClientTest {
         }
     }
 
-    private static void login(SocketChannel sc, long id, String username, String password) throws IOException, InterruptedException {
+    private void login(SocketChannel sc, long id, String username, String password) throws IOException, InterruptedException {
         String credentials = username;
         peusdo = username;
         byte opcodeToSend = password.isEmpty() ? OPCODE.LOGIN.getCode() : OPCODE.LOGINAUTH.getCode();
 
-        sendMessage(4, sc, opcodeToSend, id, "", peusdo, null);
+        sendLoginMessage(sc, opcodeToSend, id, peusdo);
         System.out.println("Tentative de connexion...");
-        Thread.sleep(200);
-
-        sendMessage(4, sc, OPCODE.GET_CONNECTED_USERS.getCode(), id, "", peusdo, null);
+        sendLoginMessage(sc, OPCODE.GET_CONNECTED_USERS.getCode(), id, peusdo);
     }
     
-    private static SocketChannel getPrivateChannel() {
+    private SocketChannel getPrivateChannel() {
         return activePrivateContext != null ? activePrivateContext.sc : null;
     }
     
-    private static void sendFile(SocketChannel sc, String filename, File file) throws IOException {
+    private  void sendFile(SocketChannel sc, String filename, File file) throws IOException {
         isSendingFile = true;
 
         byte[] fileNameBytes = UTF8.encode(filename).array();
@@ -553,6 +605,104 @@ public class ClientTest {
         expectedFileSize = 0;
         receivedBytes = 0;
     }
+    
+    private void doMainRead(SelectionKey key) throws IOException {
+        SocketChannel sc = (SocketChannel) key.channel();
+        ByteBuffer buffer = ByteBuffer.allocate(1024 * 8); // alloué à chaque lecture (ou à réutiliser)
+        int read = sc.read(buffer);
+        if (read == -1) {
+            System.out.println("Serveur a fermé la connexion.");
+            sc.close();
+            return;
+        }
+        buffer.flip();
+        if (buffer.hasRemaining()) {
+            decodeMessage(buffer);
+        }
+    }
+    
+    private void handleUserCommand(String line) throws IOException {
+        if (line == null || line.isBlank()) return;
+
+        if (waitingForPrivateReply) {
+            String reply = line.trim().toLowerCase();
+            if (pendingPrompt != null) {
+                if (reply.equals("o") || reply.equals("oui")) {
+                    privateToken = System.currentTimeMillis();
+                    expectedIncomingToken = privateToken;
+                    sendOKPrivateMessage(MainSc, 4, privateToken, peusdo, pendingPrompt.peusdoRequester(), MainSc, SERVER_PORT);
+                    System.out.println("Connexion privée acceptée avec " + pendingPrompt.peusdoRequester());
+                    privateTargetPeusdo = pendingPrompt.peusdoRequester();
+                } else {
+                    sendKOPrivateMessage(MainSc, peusdo, pendingPrompt.peusdoRequester());
+                    System.out.println("Connexion privée refusée.");
+                }
+            }
+            pendingPrompt = null;
+            waitingForPrivateReply = false;
+            return;
+        }
+
+        if (pendingPrivateRequest != null) {
+            pendingPrompt = pendingPrivateRequest;
+            pendingPrivateRequest = null;
+            waitingForPrivateReply = true;
+            System.out.println("Demande de connexion privée reçue de : " + pendingPrompt.peusdoRequester() + ". Accepter ? (o/n) > ");
+            return;
+        }
+
+        if (line.equalsIgnoreCase("/getusers")) {
+            sendLoginMessage(MainSc, OPCODE.GET_CONNECTED_USERS.getCode(), System.currentTimeMillis(), peusdo);
+            return;
+        }
+
+        if (line.startsWith("@")) {
+            int spaceIndex = line.indexOf(' ');
+            if (spaceIndex == -1 || spaceIndex == 1) {
+                System.out.println("Syntaxe invalide. Utilisez : @login");
+                return;
+            }
+            String login = line.substring(1, spaceIndex);
+            if (login.equals(peusdo)) {
+                System.out.println("Impossible d'avoir une connexion privée avec soi-même");
+                return;
+            }
+            sendRequestPrivateMessage(MainSc, peusdo, login);
+            hasInitiatedPrivateRequest = true;
+            return;
+        }
+
+        if (line.startsWith("/")) {
+            int spaceIndex = line.indexOf(' ');
+            if (spaceIndex == -1 || spaceIndex == 1) {
+                System.out.println("Syntaxe invalide. Utilisez : /<login> <nom_du_fichier>");
+                return;
+            }
+
+            String targetLogin = line.substring(1, spaceIndex).trim();
+            String filename = line.substring(spaceIndex + 1).trim();
+
+            if (privateTargetPeusdo == null || !targetLogin.equalsIgnoreCase(privateTargetPeusdo)) {
+                System.out.println("Vous n'avez pas de session privée avec " + targetLogin);
+                return;
+            }
+
+            File file = new File(fileDirectory, filename);
+            if (!file.exists() || !file.isFile()) {
+                System.out.println("Fichier introuvable : " + filename);
+                return;
+            }
+
+            sendFile(getPrivateChannel(), filename, file);
+            return;
+        }
+
+        // Message texte normal (public ou privé actif)
+        SocketChannel targetChannel = privateSessionActive && getPrivateChannel() != null
+                ? getPrivateChannel()
+                : MainSc;
+        sendTextMessage(targetChannel, peusdo, line);
+    }
 
 
     public static void main(String[] args) {
@@ -560,21 +710,25 @@ public class ClientTest {
             System.out.println("Usage: java ClientTest <pseudonyme> <mot_de_passe> <dossier_fichier>");
             return;
         }
+        
+        ClientTest client = new ClientTest();
+        client.mainLoop(args[0], args[1], args[2]);
+    }
 
-        String username = args[0];
-        String password = args[1];
-        fileDirectory = args[2];
+    private void mainLoop(String username, String password, String fileDirectory) {
 
         File dir = new File(fileDirectory);
         if (!dir.exists() || !dir.isDirectory()) {
             System.err.println("Erreur: Le dossier spécifié n'existe pas ou n'est pas un dossier.");
             return;
         }
-
         try (SocketChannel sc = SocketChannel.open()) {
             MainSc = sc;
             sc.connect(new InetSocketAddress(SERVER_ADDRESS, SERVER_PORT));
-            System.out.println("Connexion établie avec le serveur.");
+            mainSelector = Selector.open();
+            MainSc.configureBlocking(false);
+            MainSc.register(mainSelector, SelectionKey.OP_READ);
+            System.out.println("Lien établie avec le serveur.");
             
             if (privateServer == null || !privateServer.isOpen()) {
                 privateSelector = Selector.open();
@@ -587,13 +741,37 @@ public class ClientTest {
             }
             
 
-            startReceiver(sc);
 
             long id = System.currentTimeMillis();
 
             login(sc, id, username, password);
+            
+            new Thread(() -> {
+                while (true) {
+                    System.out.print("> ");
+                    String line = scanner.nextLine().trim();
+                    try {
+                        commandQueue.put(line);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }).start();
+            
 
             while (true) {
+            	if (mainSelector.selectNow() > 0) {
+            	    var iter = mainSelector.selectedKeys().iterator();
+            	    while (iter.hasNext()) {
+            	        var key = iter.next();
+            	        iter.remove();
+
+            	        if (key.isValid() && key.isReadable()) {
+            	            doMainRead(key);
+            	        }
+            	    }
+            	}
                 if (privateSelector.selectNow() > 0) {
                     var iter = privateSelector.selectedKeys().iterator();
                     while (iter.hasNext()) {
@@ -601,6 +779,9 @@ public class ClientTest {
                         iter.remove();
 
                         try {
+                        	if (key.isValid() && key.channel() == MainSc && key.isReadable()) {
+                        	    doMainRead(key);
+                        	}
                             if (key.isValid() && key.isAcceptable()) {
                                 doPrivateAccept(key);
                             }
@@ -608,7 +789,7 @@ public class ClientTest {
                                 doPrivateRead(key);
                             }
                             if (key.isValid() && key.isWritable()) {
-                                doPrivateWrite(key); // utile si tu veux envoyer plus tard
+                                doPrivateWrite(key);
                             }
                         } catch (IOException e) {
                             logger.log(Level.WARNING, "Erreur lors du traitement d'une clé privée", e);
@@ -616,82 +797,17 @@ public class ClientTest {
                         }
                     }
                 }
-
-                System.out.print("> ");
-                String line = scanner.nextLine().trim();
-                if (line.isEmpty()) continue;
-
-                if (pendingPrivateRequest != null) {
-                    var request = pendingPrivateRequest;
-                    pendingPrivateRequest = null;
-
-                    System.out.print("Demande de connexion privée reçue de : " + request.peusdoRequester() + ". Accepter ? (o/n) > ");
-                    String reply = scanner.nextLine().trim().toLowerCase();
-
-                    if (reply.equals("o") || reply.equals("oui")) {
-                    	privateToken = System.currentTimeMillis();
-                    	expectedIncomingToken = privateToken;
-                    	sendMessage(4, MainSc, OPCODE.OK_PRIVATE.getCode(), privateToken, "", peusdo, request.peusdoRequester());
-                        System.out.println("Connexion privée acceptée avec " + request.peusdoRequester());
-                        privateTargetPeusdo = request.peusdoRequester();
-                    } else {
-                        sendMessage(4, MainSc, OPCODE.KO_PRIVATE.getCode(), System.currentTimeMillis(), "", peusdo, request.peusdoRequester());
-                        System.out.println("Connexion privée refusée.");
-                    }
-                    continue;
+                
+                String command = commandQueue.poll();
+                if (command != null) {
+                    handleUserCommand(command);
                 }
-
-                if (line.equalsIgnoreCase("/getusers")) {
-                    sendMessage(4, sc, OPCODE.GET_CONNECTED_USERS.getCode(), System.currentTimeMillis(), "", peusdo, null);
-                    continue;
-                }
-
-                if (line.startsWith("@")) {
-                    int spaceIndex = line.indexOf(' ');
-                    if (spaceIndex == -1 || spaceIndex == 1) {
-                        System.out.println("Syntaxe invalide. Utilisez : @login");
-                        continue;
-                    }
-                    String login = line.substring(1, spaceIndex);
-                    if (login.equals(peusdo)) {
-                        System.out.println("Impossible d'avoir une connexion privée avec soi-même");
-                        continue;
-                    }
-                    sendMessage(4, sc, OPCODE.REQUEST_PRIVATE.getCode(), System.currentTimeMillis(), "", peusdo, login);
-                    hasInitiatedPrivateRequest = true;
-                } else if (line.startsWith("/")) {
-                    int spaceIndex = line.indexOf(' ');
-                    if (spaceIndex == -1 || spaceIndex == 1) {
-                        System.out.println("Syntaxe invalide. Utilisez : /<login> <nom_du_fichier>");
-                        continue;
-                    }
-
-                    String targetLogin = line.substring(1, spaceIndex).trim();
-                    String filename = line.substring(spaceIndex + 1).trim();
-
-                    if (privateTargetPeusdo == null || !targetLogin.equalsIgnoreCase(privateTargetPeusdo)) {
-                        System.out.println("Vous n'avez pas de session privée avec " + targetLogin);
-                        continue;
-                    }
-
-                    File file = new File(fileDirectory, filename);
-                    if (!file.exists() || !file.isFile()) {
-                        System.out.println("Fichier introuvable : " + filename);
-                        continue;
-                    }
-
-                    sendFile(getPrivateChannel(), filename, file);
-                    continue;
-                } else {
-                	SocketChannel targetChannel = privateSessionActive && getPrivateChannel() != null
-                		    ? getPrivateChannel()
-                		    : MainSc;
-                    sendMessage(4, targetChannel, OPCODE.MESSAGE.getCode(), System.currentTimeMillis(), line, peusdo, null);
-                }
+                
+                Thread.sleep(10);
             }
 
         } catch (IOException | InterruptedException e) {
-            System.err.println("Erreur client : " + e.getMessage());
+            logger.log(Level.SEVERE, "Erreur client : " + e.getMessage());
         }
     }
 }
