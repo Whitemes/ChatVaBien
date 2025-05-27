@@ -351,9 +351,11 @@ public class ClientTest {
     private void sendOKPrivateMessage(SocketChannel sc, int version, long token, String peusdo, String target, SocketChannel ip, int port) throws IOException {
         ByteBuffer pseudoBuf = UTF8.encode(peusdo);
         ByteBuffer targetBuf = UTF8.encode(target);
-        InetAddress inetAddress = ip.getLocalAddress();
-        byte[] ipBytes = inetAddress.getAddress(); // te donne directement la bonne taille
-        byte ipType = (byte) ipBytes.length;
+
+        InetSocketAddress socketAddress = (InetSocketAddress) ip.getLocalAddress();
+        InetAddress inetAddress = socketAddress.getAddress();
+        byte[] ipBytes = inetAddress.getAddress();
+        byte ipType = (byte) ipBytes.length; // 4 pour IPv4, 16 pour IPv6
 
         ByteBuffer bb = ByteBuffer.allocate(1024);
         bb.put(OPCODE.OK_PRIVATE.getCode());
@@ -362,9 +364,10 @@ public class ClientTest {
         bb.putInt(targetBuf.remaining());
         bb.put(targetBuf);
         bb.put((byte) version);
-        bb.put(ipBuf);
-        bb.putInt(port);
-        bb.putLong(token);
+        bb.put(ipType);       // 0x04 ou 0x10
+        bb.put(ipBytes);      // 4 ou 16 octets
+        bb.putInt(port);      // port du serveur
+        bb.putLong(token);    // identifiant unique de la session
 
         bb.flip();
         while (bb.hasRemaining()) {
@@ -462,20 +465,24 @@ public class ClientTest {
                 buffer.get(targetBytes);
                 String target = UTF8.decode(ByteBuffer.wrap(targetBytes)).toString();
 
+                // ✅ 3. Lire type IP et adresse IP
                 byte ipType = buffer.get();
                 int ipLength = switch (ipType) {
-                    case 0x04 -> 4;
-                    case 0x06, 0x10 -> 16;
+                    case 4 -> 4;
+                    case 16 -> 16;
                     default -> throw new IllegalArgumentException("Type IP inconnu: " + ipType);
                 };
                 byte[] ipBytes = new byte[ipLength];
                 buffer.get(ipBytes);
                 InetAddress ipAddress = InetAddress.getByAddress(ipBytes);
 
+                // ✅ 4. Lire port
                 int port = buffer.getInt();
+
+                // ✅ 5. Lire token
                 long token = buffer.getLong();
 
-                // Si je suis le target (et donc je n’ai pas ouvert de socket moi-même)
+                // 🔁 Traitement de la connexion entrante (comme tu fais déjà)
                 if (!hasOpenedPrivateSocket && requester != null && !requester.equals(peusdo)) {
                     System.out.println("Connexion inversée : ouverture d'une socket vers " + requester);
 
@@ -502,9 +509,9 @@ public class ClientTest {
                     hasOpenedPrivateSocket = true;
                 }
 
-                // dans tous les cas on enregistre le target pour savoir à qui parler
                 privateTargetPeusdo = target;
             }
+
             case KO_PRIVATE -> System.out.println("La connexion privée a été refusée par le destinataire.");
             case CONNECTED_USERS_LIST -> {
                 if (buffer.remaining() < Integer.BYTES) {
