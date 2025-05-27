@@ -4,13 +4,31 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
 
+/**
+ * Represents a user in the ChatVaBien protocol.
+ *
+ * @param id     the unique identifier of the user
+ * @param pseudo the pseudonym of the user
+ * @param sc     the socket channel associated with the user
+ * @param isAuth whether the user is authenticated
+ */
 public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
 
+    /**
+     * Provides static utility methods to encode protocol messages for transmission.
+     * <p>
+     * This class should not be instantiated.
+     */
     public static class ProtocolEncoder {
         private static final Charset UTF8 = Charset.forName("UTF8");
 
         /**
-         * Encode un message de broadcast/public (ex: message du serveur à tous).
+         * Encodes a broadcast or public message (e.g., a message sent from the server to all clients).
+         *
+         * @param sender  the pseudonym of the sender
+         * @param message the message content
+         * @param opcode  the operation code for the message
+         * @return a {@link ByteBuffer} containing the encoded message
          */
         public static ByteBuffer encodeBroadcastMessage(String sender, String message, byte opcode) {
             var encodedSender = UTF8.encode(sender);
@@ -26,7 +44,12 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
         }
 
         /**
-         * Encode une requête de connexion privée (REQUEST_PRIVATE ou KO_PRIVATE).
+         * Encodes a private connection request message (REQUEST_PRIVATE or KO_PRIVATE).
+         *
+         * @param from   the pseudonym of the requester
+         * @param to     the pseudonym of the target user
+         * @param opcode the operation code for the request
+         * @return a {@link ByteBuffer} containing the encoded request
          */
         public static ByteBuffer encodePrivateRequest(String from, String to, byte opcode) {
             var fromBytes = UTF8.encode(from);
@@ -42,7 +65,14 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
         }
 
         /**
-         * Encode une réponse OK à une demande de connexion privée (OK_PRIVATE).
+         * Encodes an OK response to a private connection request (OK_PRIVATE).
+         *
+         * @param from      the pseudonym of the requester
+         * @param to        the pseudonym of the target user
+         * @param clientIp  the {@link Ip} object representing the client's address and port
+         * @param token     the unique token associated with the private connection
+         * @param opcode    the operation code for the OK response
+         * @return a {@link ByteBuffer} containing the encoded OK response
          */
         public static ByteBuffer encodeOKPrivateRequest(String from, String to, Ip clientIp, long token, byte opcode) {
             var fromBytes = UTF8.encode(from);
@@ -73,14 +103,24 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
         }
 
         /**
-         * Encode une réponse KO à une demande de connexion privée (KO_PRIVATE).
+         * Encodes a KO (refusal) response to a private connection request (KO_PRIVATE).
+         *
+         * @param from   the pseudonym of the requester
+         * @param to     the pseudonym of the target user
+         * @param opcode the operation code for the KO response
+         * @return a {@link ByteBuffer} containing the encoded KO response
          */
         public static ByteBuffer encodeKOPrivateRequest(String from, String to, byte opcode) {
             return encodePrivateRequest(from, to, opcode);
         }
 
         /**
-         * Encode la liste des utilisateurs connectés (GET_CONNECTED_USERS -> CONNECTED_USERS_LIST).
+         * Encodes a response containing the list of connected users
+         * (typically in response to a GET_CONNECTED_USERS request).
+         *
+         * @param userList a comma-separated list of connected user pseudonyms
+         * @param opcode   the operation code for the user list response
+         * @return a {@link ByteBuffer} containing the encoded user list
          */
         public static ByteBuffer encodeUserList(String userList, byte opcode) {
             var encodedUserList = UTF8.encode(userList);
@@ -93,7 +133,12 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
         }
 
         /**
-         * Encode le statut de login (LOGIN_ACCEPTED ou LOGIN_REFUSED).
+         * Encodes a login status response (LOGIN_ACCEPTED or LOGIN_REFUSED).
+         *
+         * @param accepted      {@code true} if the login is accepted; {@code false} otherwise
+         * @param opcodeAccepted the operation code for an accepted login
+         * @param opcodeRefused  the operation code for a refused login
+         * @return a {@link ByteBuffer} containing the encoded login status
          */
         public static ByteBuffer encodeLoginStatus(boolean accepted, byte opcodeAccepted, byte opcodeRefused) {
             ByteBuffer bb = ByteBuffer.allocate(1);
@@ -102,10 +147,7 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
             return bb;
         }
 
-        // Ajoute ici d'autres méthodes spécifiques au besoin du protocole...
-        // Par exemple, pour des futurs OPCODEs, il suffit de dupliquer le pattern.
-
-        // Utility class: ne pas instancier
+        // Utility class: prevent instantiation.
         private ProtocolEncoder() {}
     }
 }

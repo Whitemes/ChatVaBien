@@ -12,6 +12,13 @@ import java.util.logging.Logger;
 import fr.upem.net.chatvabien.protocol.*;
 import fr.upem.net.chatvabien.protocol.Reader.ProcessStatus;
 
+/**
+ * Main server class for the ChatVaBien application.
+ * <p>
+ * This server manages user connections, authentication, message broadcasting,
+ * private connections, and communication with an external password (MDP) server.
+ * </p>
+ */
 public class ChatVaBienServer {
     private static final Logger logger = Logger.getLogger(ChatVaBienServer.class.getName());
     private static final int MAX_BUFFER_SIZE = 1024;
@@ -24,10 +31,16 @@ public class ChatVaBienServer {
     private final SocketChannel mdpChannel;
     private final SelectionKey mdpKey;
     private final Map<Long, Context> pendingAuthRequests = new ConcurrentHashMap<>(); // pour lier réponse -> utilisateur
-    private long authIdCounter = 0;
 
     private final Random random = new Random();
 
+    /**
+     * Creates and initializes a new ChatVaBienServer.
+     *
+     * @param port       the TCP port to listen for client connections
+     * @param mdpAddress the address of the external password/authentication server
+     * @throws IOException if an I/O error occurs during server setup
+     */
     public ChatVaBienServer(int port, InetSocketAddress mdpAddress) throws IOException {
         this.serverSocketChannel = ServerSocketChannel.open();
         this.serverSocketChannel.bind(new InetSocketAddress(port));
@@ -41,6 +54,11 @@ public class ChatVaBienServer {
         this.mdpKey = mdpChannel.register(selector, SelectionKey.OP_CONNECT | SelectionKey.OP_READ);
     }
 
+    /**
+     * Starts the main server event loop, accepting and processing client connections and requests.
+     *
+     * @throws IOException if an I/O error occurs during server operation
+     */
     public void launch() throws IOException {
         while (!Thread.interrupted()) {
             selector.select();
@@ -78,6 +96,12 @@ public class ChatVaBienServer {
         }
     }
 
+    /**
+     * Accepts a new client connection and registers it with the selector.
+     *
+     * @param key the selection key corresponding to the server socket channel
+     * @throws IOException if an I/O error occurs while accepting the connection
+     */
     private void doAccept(SelectionKey key) throws IOException {
         SocketChannel sc = serverSocketChannel.accept();
         if (sc == null) return;
@@ -86,6 +110,12 @@ public class ChatVaBienServer {
         clientKey.attach(new Context(clientKey, loggedUsers, selector));
     }
 
+    /**
+     * Handles reading data from a client connection.
+     *
+     * @param key the selection key corresponding to the client socket channel
+     * @throws IOException if an I/O error occurs while reading from the client
+     */
     private void doRead(SelectionKey key) throws IOException {
         var context = (Context) key.attachment();
         context.doRead();
@@ -94,6 +124,12 @@ public class ChatVaBienServer {
         }
     }
 
+    /**
+     * Handles writing data to a client connection.
+     *
+     * @param key the selection key corresponding to the client socket channel
+     * @throws IOException if an I/O error occurs while writing to the client
+     */
     private void doWrite(SelectionKey key) throws IOException {
         var context = (Context) key.attachment();
         context.doWrite();
@@ -102,6 +138,12 @@ public class ChatVaBienServer {
         }
     }
 
+
+    /**
+     * Closes a client connection and removes it from the active users list.
+     *
+     * @param key the selection key corresponding to the client socket channel
+     */
     private void silentlyClose(SelectionKey key) {
         try {
             var context = (Context) key.attachment();
@@ -114,6 +156,11 @@ public class ChatVaBienServer {
         }
     }
 
+    /**
+     * Handles the response from the external password/authentication server (ServerMDP).
+     *
+     * @throws IOException if an I/O error occurs while reading from the authentication server
+     */
     private void handleMDPResponse() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(1024);
         int read = mdpChannel.read(buffer);
@@ -128,8 +175,13 @@ public class ChatVaBienServer {
             }
         }
     }
-
-    public class Context implements ServerContext{
+    /**
+     * Represents the context for a single client connection.
+     * <p>
+     * Handles the state, input/output buffers, and protocol logic for each client.
+     * Implements the {@link fr.upem.net.chatvabien.protocol.ServerContext} interface.
+     */
+    private class Context implements ServerContext{
         private final SocketChannel sc;
         private final SelectionKey key;
         private final Selector selector;
@@ -152,12 +204,24 @@ public class ChatVaBienServer {
         private boolean closed = false;
         private boolean loggedIn = false;
 
+        /**
+         * Constructs a new context for a client connection.
+         *
+         * @param key         the selection key associated with the client socket channel
+         * @param loggedUsers the map of currently logged-in users
+         * @param selector    the selector managing all channels
+         */
         Context(SelectionKey key, Map<String, User> loggedUsers, Selector selector) {
             this.key = key;
             this.sc = (SocketChannel) key.channel();
             this.selector = selector;
         }
 
+        /**
+         * Reads data from the client channel and processes incoming requests.
+         *
+         * @throws IOException if an I/O error occurs while reading
+         */
         void doRead() throws IOException {
             int read = sc.read(bufferIn);
             if (read == -1) {
@@ -169,10 +233,18 @@ public class ChatVaBienServer {
             bufferIn.compact();
         }
 
+        /**
+         * Processes the incoming data according to the protocol state machine.
+         */
         void process() {
             processIn();
         }
 
+        /**
+         * Writes any pending messages to the client channel.
+         *
+         * @throws IOException if an I/O error occurs during writing
+         */
         void doWrite() throws IOException {
             while (!queueOut.isEmpty()) {
                 ByteBuffer current = queueOut.peek();
@@ -187,11 +259,19 @@ public class ChatVaBienServer {
             }
         }
 
+        /**
+         * Queues a message to be sent to the client.
+         *
+         * @param bb the buffer containing the message to send
+         */
         void queueMessage(ByteBuffer bb) {
             queueOut.add(bb.duplicate());
             updateInterestOps();
         }
 
+        /**
+         * Updates the interest operations for the selector, registering OP_WRITE if needed.
+         */
         void updateInterestOps() {
             int ops = SelectionKey.OP_READ;
             if (!queueOut.isEmpty()) {
@@ -200,9 +280,16 @@ public class ChatVaBienServer {
             key.interestOps(ops);
         }
 
+
+        /**
+         * Checks if the client connection is closed.
+         *
+         * @return {@code true} if closed; {@code false} otherwise
+         */
         boolean isClosed() {
             return closed;
         }
+
 
         public void handleLogin() {
             if (loggedUsers.containsKey(peusdo)) {
@@ -267,6 +354,11 @@ public class ChatVaBienServer {
             }
         }
 
+        /**
+         * Sends a login status message to the client.
+         *
+         * @param accepted {@code true} if the login is accepted; {@code false} otherwise
+         */
         private void sendLoginStatus(boolean accepted) {
             ByteBuffer bb = User.ProtocolEncoder.encodeLoginStatus(
                     accepted,
@@ -276,6 +368,9 @@ public class ChatVaBienServer {
             queueMessage(bb);
         }
 
+        /**
+         * Logs out the current user and cleans up the context.
+         */
         private void logout() {
             if (peusdo != null && loggedIn) {
                 loggedUsers.remove(peusdo);
@@ -285,6 +380,12 @@ public class ChatVaBienServer {
             }
         }
 
+        /**
+         * Handles the response from the password/authentication server (ServerMDP).
+         *
+         * @param success whether the authentication was successful
+         * @param id      the authentication request ID
+         */
         public void onMDPResponse(boolean success, long id) {
             if (opcode == OPCODE.LOGINAUTH.getCode()) {
                 if (success) {
@@ -301,6 +402,9 @@ public class ChatVaBienServer {
             }
         }
 
+        /**
+         * Processes input buffers according to the protocol state machine.
+         */
         private void processIn() {
             for (; ; ) {
                 switch (state) {
@@ -419,6 +523,13 @@ public class ChatVaBienServer {
             }
         }
 
+
+        /**
+         * Broadcasts a message to all connected users except the sender.
+         *
+         * @param sender  the pseudonym of the sender
+         * @param message the message to broadcast
+         */
         public void broadcastMessage(String sender, String message) {
             ByteBuffer bb = User.ProtocolEncoder.encodeBroadcastMessage(sender, message, OPCODE.MESSAGE.getCode());
             for (Map.Entry<String, User> entry : loggedUsers.entrySet()) {
@@ -436,6 +547,15 @@ public class ChatVaBienServer {
         }
     }
 
+
+    /**
+     * Entry point to launch the ChatVaBien server.
+     * <p>
+     * Usage: {@code java ChatVaBienServer <serverPort> <mdpPort>}
+     *
+     * @param args command-line arguments: server port and password server port
+     * @throws IOException if an I/O error occurs during server startup or execution
+     */
     public static void main(String[] args) throws IOException {
         if (args.length != 2) {
             System.err.println("Usage: java ChatVaBienServer <serverPort> <mdpPort>");
