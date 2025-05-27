@@ -197,22 +197,43 @@ public class ChatVaBienServer {
             processIn();
         }
 
-        void doWrite() throws IOException {
-            while (!queueOut.isEmpty()) {
-                ByteBuffer current = queueOut.peek();
-                sc.write(current);
-                if (current.hasRemaining()) {
-                    break;
-                }
-                queueOut.remove();
-            }
+//        void doWrite() throws IOException {
+//            while (!queueOut.isEmpty()) {
+//                ByteBuffer current = queueOut.peek();
+//                sc.write(current);
+//                if (current.hasRemaining()) {
+//                    break;
+//                }
+//                queueOut.remove();
+//            }
+//
+//            if (queueOut.isEmpty()) {
+//                key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+//            }
+//        }
 
-            if (queueOut.isEmpty()) {
-                key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
-            }
-        }
+       void doWrite() throws IOException {
+           while (!queueOut.isEmpty()) {
+               ByteBuffer current = queueOut.peek();
+               sc.write(current);
+               if (current.hasRemaining()) {
+                   break;
+               }
+               queueOut.remove();
+           }
 
-        void queueMessage(ByteBuffer bb) {
+           if (queueOut.isEmpty()) {
+               key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+
+               // ✅ Ajoute ceci pour forcer le traitement s’il reste des choses dans bufferIn
+               bufferIn.flip();
+               process();     // force la lecture des messages restants dans le buffer
+               bufferIn.compact();
+           }
+       }
+
+
+       void queueMessage(ByteBuffer bb) {
             queueOut.add(bb.duplicate());
             logger.info("<<<<<<<buffer >>>>>>>>" +dumpBufferNum(bb));
             updateInterestOps();
@@ -234,6 +255,15 @@ public class ChatVaBienServer {
                 ops |= SelectionKey.OP_WRITE;
             }
             key.interestOps(ops);
+//                int ops = SelectionKey.OP_READ;
+//                if (!queueOut.isEmpty()) {
+//                    ops |= SelectionKey.OP_WRITE;
+//                }
+//
+//                // Applique le changement uniquement si différent
+//                if (key.interestOps() != ops) {
+//                    key.interestOps(ops);
+//                }
         }
 
         boolean isClosed() {

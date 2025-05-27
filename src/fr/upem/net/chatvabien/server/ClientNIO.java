@@ -115,6 +115,7 @@ public class ClientNIO {
                 return;
             }
             System.out.println("SENDING FROM: " + pseudo + " → " + line);
+            System.out.printf("🧾 OPCODE envoyé: %d (hex: 0x%02X)%n", OPCODE.MESSAGE.getCode(), OPCODE.MESSAGE.getCode());
             ByteBuffer bb = buildMessagePacket(pseudo, line);
             queueMessage(bb);
         }
