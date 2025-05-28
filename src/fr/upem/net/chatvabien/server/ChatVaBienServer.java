@@ -1,88 +1,83 @@
 package fr.upem.net.chatvabien.server;
 
 import java.io.IOException;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
-import java.nio.charset.Charset;
-import java.util.ArrayDeque;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import fr.upem.net.chatvabien.protocol.ByteReader;
-import fr.upem.net.chatvabien.protocol.GetUsersRequest;
-import fr.upem.net.chatvabien.protocol.Ip;
-import fr.upem.net.chatvabien.protocol.IpReader;
-import fr.upem.net.chatvabien.protocol.KOPrivateResquest;
-import fr.upem.net.chatvabien.protocol.LoginRequest;
-import fr.upem.net.chatvabien.protocol.LongReader;
-import fr.upem.net.chatvabien.protocol.MessageRequest;
-import fr.upem.net.chatvabien.protocol.OKPrivateRequest;
-import fr.upem.net.chatvabien.protocol.OPCODE;
-import fr.upem.net.chatvabien.protocol.PrivateRequest;
+import fr.upem.net.chatvabien.protocol.*;
 import fr.upem.net.chatvabien.protocol.Reader.ProcessStatus;
-import fr.upem.net.chatvabien.protocol.Request;
-import fr.upem.net.chatvabien.protocol.StringReader;
-import fr.upem.net.chatvabien.protocol.User;
 
+/**
+ * Main server class for the ChatVaBien application.
+ * <p>
+ * This server manages user connections, authentication, message broadcasting,
+ * private connections, and communication with an external password (MDP) server.
+ * </p>
+ */
 public class ChatVaBienServer {
-	private static final Logger logger = Logger.getLogger(ChatVaBienServer.class.getName());
-	private static final Charset UTF8 = Charset.forName("UTF8");
-	private static final int MAX_BUFFER_SIZE = 1024;
-	
-	private final Map<String, User> loggedUsers = new ConcurrentHashMap<>();
-	
+    private static final Logger logger = Logger.getLogger(ChatVaBienServer.class.getName());
+    private static final int MAX_BUFFER_SIZE = 1024;
+
+    private final Map<String, User> loggedUsers = new ConcurrentHashMap<>();
+
     private final ServerSocketChannel serverSocketChannel;
     private final Selector selector;
-    
+
     private final SocketChannel mdpChannel;
     private final SelectionKey mdpKey;
     private final Map<Long, Context> pendingAuthRequests = new ConcurrentHashMap<>(); // pour lier réponse -> utilisateur
-    private long authIdCounter = 0;
-    
+
     private final Random random = new Random();
-    
-    
+
+    /**
+     * Creates and initializes a new ChatVaBienServer.
+     *
+     * @param port       the TCP port to listen for client connections
+     * @param mdpAddress the address of the external password/authentication server
+     * @throws IOException if an I/O error occurs during server setup
+     */
     public ChatVaBienServer(int port, InetSocketAddress mdpAddress) throws IOException {
         this.serverSocketChannel = ServerSocketChannel.open();
         this.serverSocketChannel.bind(new InetSocketAddress(port));
         this.serverSocketChannel.configureBlocking(false);
         this.selector = Selector.open();
         this.serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
-        
+
         this.mdpChannel = SocketChannel.open();
         this.mdpChannel.configureBlocking(false);
         this.mdpChannel.connect(mdpAddress);
         this.mdpKey = mdpChannel.register(selector, SelectionKey.OP_CONNECT | SelectionKey.OP_READ);
     }
 
+    /**
+     * Starts the main server event loop, accepting and processing client connections and requests.
+     *
+     * @throws IOException if an I/O error occurs during server operation
+     */
     public void launch() throws IOException {
         while (!Thread.interrupted()) {
             selector.select();
-            Set<SelectionKey> selectedKeys = selector.selectedKeys();
-            Iterator<SelectionKey> iter = selectedKeys.iterator();
+            Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
             while (iter.hasNext()) {
                 SelectionKey key = iter.next();
                 try {
-                	if (key.channel() == mdpChannel) {
-                	    if (key.isConnectable()) {
-                	        if (mdpChannel.finishConnect()) {
-                	            logger.info("Connecté à ServerMDP");
-                	        }
-                	    }
-                	    if (key.isReadable()) {
-                	        handleMDPResponse();
-                	    }
-                	    iter.remove();
-                	    continue;
-                	}
+                    if (key.channel() == mdpChannel) {
+                        if (key.isConnectable()) {
+                            if (mdpChannel.finishConnect()) {
+                                logger.info("Connecté à ServerMDP");
+                            }
+                        }
+                        if (key.isReadable()) {
+                            handleMDPResponse();
+                        }
+                        iter.remove();
+                        continue;
+                    }
                     if (key.isValid() && key.isAcceptable()) {
                         doAccept(key);
                     }
@@ -101,16 +96,26 @@ public class ChatVaBienServer {
         }
     }
 
+    /**
+     * Accepts a new client connection and registers it with the selector.
+     *
+     * @param key the selection key corresponding to the server socket channel
+     * @throws IOException if an I/O error occurs while accepting the connection
+     */
     private void doAccept(SelectionKey key) throws IOException {
         SocketChannel sc = serverSocketChannel.accept();
-        if (sc == null) {
-        	return;
-        }
+        if (sc == null) return;
         sc.configureBlocking(false);
         SelectionKey clientKey = sc.register(selector, SelectionKey.OP_READ);
-        clientKey.attach(new Context(clientKey, loggedUsers));
+        clientKey.attach(new Context(clientKey, loggedUsers, selector));
     }
 
+    /**
+     * Handles reading data from a client connection.
+     *
+     * @param key the selection key corresponding to the client socket channel
+     * @throws IOException if an I/O error occurs while reading from the client
+     */
     private void doRead(SelectionKey key) throws IOException {
         var context = (Context) key.attachment();
         context.doRead();
@@ -119,6 +124,12 @@ public class ChatVaBienServer {
         }
     }
 
+    /**
+     * Handles writing data to a client connection.
+     *
+     * @param key the selection key corresponding to the client socket channel
+     * @throws IOException if an I/O error occurs while writing to the client
+     */
     private void doWrite(SelectionKey key) throws IOException {
         var context = (Context) key.attachment();
         context.doWrite();
@@ -127,9 +138,15 @@ public class ChatVaBienServer {
         }
     }
 
+
+    /**
+     * Closes a client connection and removes it from the active users list.
+     *
+     * @param key the selection key corresponding to the client socket channel
+     */
     private void silentlyClose(SelectionKey key) {
         try {
-        	var context = (Context) key.attachment();
+            var context = (Context) key.attachment();
             if (context != null) {
                 context.logout();
             }
@@ -138,7 +155,12 @@ public class ChatVaBienServer {
             // ignore
         }
     }
-    
+
+    /**
+     * Handles the response from the external password/authentication server (ServerMDP).
+     *
+     * @throws IOException if an I/O error occurs while reading from the authentication server
+     */
     private void handleMDPResponse() throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(1024);
         int read = mdpChannel.read(buffer);
@@ -153,35 +175,53 @@ public class ChatVaBienServer {
             }
         }
     }
-
-   public class Context {
+    /**
+     * Represents the context for a single client connection.
+     * <p>
+     * Handles the state, input/output buffers, and protocol logic for each client.
+     * Implements the {@link fr.upem.net.chatvabien.protocol.ServerContext} interface.
+     */
+    private class Context implements ServerContext{
         private final SocketChannel sc;
         private final SelectionKey key;
+        private final Selector selector;
         private final ByteBuffer bufferIn = ByteBuffer.allocate(MAX_BUFFER_SIZE);
         private final Queue<ByteBuffer> queueOut = new ArrayDeque<>();
         private final ByteReader opcodeReader = new ByteReader();
         private final StringReader stringReader = new StringReader();
         private final IpReader ipReader = new IpReader();
         private final LongReader idReader = new LongReader();
-        
-        private enum State {WAITING_TOTAL_SIZE, WAITING_OPCODE, WAITING_ID, WAITING_IP, WAITING_PEUSDO, WAITING_TARGET_PEUSDO, WAITING_MESSAGE, DONE, ERROR}
+
+        private enum State {WAITING_OPCODE, WAITING_ID, WAITING_IP, WAITING_PEUSDO, WAITING_TARGET_PEUSDO, WAITING_MESSAGE, DONE, ERROR}
         private State state = State.WAITING_OPCODE;
         private byte opcode;
         private String message;
         private String peusdo;
         private String targetPeusdo;
         private long token;
-        private PrivateRequest privateResquest;
         private Ip clientIp;
-        
 
         private boolean closed = false;
+        private boolean loggedIn = false;
 
-        Context(SelectionKey key, Map<String, User> loggedUsers) {
+        /**
+         * Constructs a new context for a client connection.
+         *
+         * @param key         the selection key associated with the client socket channel
+         * @param loggedUsers the map of currently logged-in users
+         * @param selector    the selector managing all channels
+         */
+        Context(SelectionKey key, Map<String, User> loggedUsers, Selector selector) {
             this.key = key;
             this.sc = (SocketChannel) key.channel();
+            this.selector = selector;
         }
 
+        /**
+         * Reads data from the client channel and processes incoming requests.
+         *
+         * @throws IOException if an I/O error occurs while reading
+         */
         void doRead() throws IOException {
             int read = sc.read(bufferIn);
             if (read == -1) {
@@ -193,10 +233,18 @@ public class ChatVaBienServer {
             bufferIn.compact();
         }
 
+        /**
+         * Processes the incoming data according to the protocol state machine.
+         */
         void process() {
             processIn();
         }
 
+        /**
+         * Writes any pending messages to the client channel.
+         *
+         * @throws IOException if an I/O error occurs during writing
+         */
         void doWrite() throws IOException {
             while (!queueOut.isEmpty()) {
                 ByteBuffer current = queueOut.peek();
@@ -206,29 +254,25 @@ public class ChatVaBienServer {
                 }
                 queueOut.remove();
             }
-
             if (queueOut.isEmpty()) {
                 key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
             }
         }
 
+        /**
+         * Queues a message to be sent to the client.
+         *
+         * @param bb the buffer containing the message to send
+         */
         void queueMessage(ByteBuffer bb) {
             queueOut.add(bb.duplicate());
-            logger.info("<<<<<<<buffer >>>>>>>>" +dumpBufferNum(bb));
             updateInterestOps();
         }
 
+        /**
+         * Updates the interest operations for the selector, registering OP_WRITE if needed.
+         */
         void updateInterestOps() {
-        	if (key.interestOps() == SelectionKey.OP_CONNECT) {
-        	  try {
-        	    if (!sc.finishConnect()) {
-        	      logger.warning("This should be fixed !");
-        	      return;
-        	    }
-        	  } catch (IOException e) {
-        	    // ignore
-        	  }
-        	}
             int ops = SelectionKey.OP_READ;
             if (!queueOut.isEmpty()) {
                 ops |= SelectionKey.OP_WRITE;
@@ -236,47 +280,43 @@ public class ChatVaBienServer {
             key.interestOps(ops);
         }
 
+
+        /**
+         * Checks if the client connection is closed.
+         *
+         * @return {@code true} if closed; {@code false} otherwise
+         */
         boolean isClosed() {
             return closed;
         }
-        
+
+
         public void handleLogin() {
             if (loggedUsers.containsKey(peusdo)) {
                 sendLoginStatus(false);
             } else {
-            	var newUser = new User(random.nextLong(), peusdo, sc, false);
+                var newUser = new User(random.nextLong(), peusdo, sc, false);
                 loggedUsers.put(newUser.pseudo(), newUser);
+                loggedIn = true;
                 sendLoginStatus(true);
-                Request request = new MessageRequest("Server", peusdo + " vient de se connecter.");
-                request.handle(this);
+                broadcastMessage("Server", peusdo + " vient de se connecter.");
             }
         }
-        
+
         public void handleGetUsers() {
-        	StringBuilder sb = new StringBuilder();
-            for (Map.Entry<String, User> entry : loggedUsers.entrySet()) {
-                sb.append(entry.getKey()).append("\n");
+            StringBuilder sb = new StringBuilder();
+            for (String pseudo : loggedUsers.keySet()) {
+                sb.append(pseudo).append("\n");
             }
-            ByteBuffer response = encodeUserList(sb.toString());
+            ByteBuffer response = User.ProtocolEncoder.encodeUserList(sb.toString(), OPCODE.CONNECTED_USERS_LIST.getCode());
             queueMessage(response);
         }
-        
+
         public void handlePrivateRequest() {
-        	if(!loggedUsers.containsKey(peusdo)) {
-        		logger.log(Level.WARNING, "Requete privée reçu d'un utilisateur non connecté.");
-        		return;
-        	}
-        	if(!loggedUsers.containsKey(targetPeusdo)) {
-        		logger.log(Level.WARNING, "Requete privée à destinataire d'un utilisateur non connecté.");
-        		return;
-        	}
-        	
-        	logger.log(Level.INFO, "Requete privée reçue de " + peusdo + " à " + targetPeusdo);
-        	
-        	User targetUser = loggedUsers.get(targetPeusdo);
-        	var request = encodePrivateRequest();
-        	
-        	SocketChannel userChannel = targetUser.sc();
+            if (!loggedUsers.containsKey(peusdo) || !loggedUsers.containsKey(targetPeusdo)) return;
+            User targetUser = loggedUsers.get(targetPeusdo);
+            ByteBuffer request = User.ProtocolEncoder.encodePrivateRequest(peusdo, targetPeusdo, OPCODE.REQUEST_PRIVATE.getCode());
+            SocketChannel userChannel = targetUser.sc();
             if (userChannel.isOpen()) {
                 SelectionKey userKey = userChannel.keyFor(selector);
                 if (userKey != null) {
@@ -284,38 +324,13 @@ public class ChatVaBienServer {
                     userContext.queueMessage(request.duplicate());
                 }
             }
-        	
         }
-        
-        private ByteBuffer encodePrivateRequest() {
-        	var resquesterBytes = UTF8.encode(peusdo);
-        	var targetBytes = UTF8.encode(targetPeusdo);
-        	ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + resquesterBytes.remaining() + Integer.BYTES + targetBytes.remaining());
-        	bb.put(OPCODE.REQUEST_PRIVATE.getCode());
-        	bb.putInt(resquesterBytes.remaining());
-        	bb.put(resquesterBytes);
-        	bb.putInt(targetBytes.remaining());
-        	bb.put(targetBytes);
-        	bb.flip();
-        	return bb;
-        }
-        
+
         public void handleOKPrivateRequest() {
-        	if(!loggedUsers.containsKey(peusdo)) {
-        		logger.log(Level.WARNING, "Requete privée reçu d'un utilisateur non connecté.");
-        		return;
-        	}
-        	if(!loggedUsers.containsKey(targetPeusdo)) {
-        		logger.log(Level.WARNING, "Requete privée à destinataire d'un utilisateur non connecté.");
-        		return;
-        	}
-        	
-        	logger.log(Level.INFO, "Requete privée acceptée reçue de " + peusdo + " à " + targetPeusdo);
-        	
-        	User requesterUser = loggedUsers.get(targetPeusdo);
-        	var request = encodeOKPrivateRequest();
-        	
-        	SocketChannel userChannel = requesterUser.sc();
+            if (!loggedUsers.containsKey(peusdo) || !loggedUsers.containsKey(targetPeusdo)) return;
+            User requesterUser = loggedUsers.get(targetPeusdo);
+            ByteBuffer request = User.ProtocolEncoder.encodeOKPrivateRequest(peusdo, targetPeusdo, clientIp, token, OPCODE.OK_PRIVATE.getCode());
+            SocketChannel userChannel = requesterUser.sc();
             if (userChannel.isOpen()) {
                 SelectionKey userKey = userChannel.keyFor(selector);
                 if (userKey != null) {
@@ -324,52 +339,12 @@ public class ChatVaBienServer {
                 }
             }
         }
-        
-        private ByteBuffer encodeOKPrivateRequest() {
-            var requesterBytes = UTF8.encode(peusdo);
-            var targetBytes = UTF8.encode(targetPeusdo);
 
-            byte[] rawIp = clientIp.address().getAddress();
-            byte ipType = clientIp.version();
-            int port = clientIp.port();
-
-            ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES +
-                    Integer.BYTES + requesterBytes.remaining() +
-                    Integer.BYTES + targetBytes.remaining() +
-                    Byte.BYTES + rawIp.length +
-                    Integer.BYTES +
-                    Long.BYTES);
-
-            bb.put(OPCODE.OK_PRIVATE.getCode());
-            bb.putInt(requesterBytes.remaining());
-            bb.put(requesterBytes);
-            bb.putInt(targetBytes.remaining());
-            bb.put(targetBytes);
-            bb.put(ipType);
-            bb.put(rawIp);
-            bb.putInt(port);
-            bb.putLong(token);
-            bb.flip();
-            return bb;
-        }
-
-        
         public void handleKOPrivateRequest() {
-        	if(!loggedUsers.containsKey(peusdo)) {
-        		logger.log(Level.WARNING, "Requete privée reçu d'un utilisateur non connecté.");
-        		return;
-        	}
-        	if(!loggedUsers.containsKey(targetPeusdo)) {
-        		logger.log(Level.WARNING, "Requete privée à destinataire d'un utilisateur non connecté.");
-        		return;
-        	}
-        	
-        	logger.log(Level.INFO, "Requete privée refusée reçue de " + peusdo + " à " + targetPeusdo);
-        	
-        	User requesterUser = loggedUsers.get(targetPeusdo);
-        	var request = encodeKOPrivateRequest();
-        	
-        	SocketChannel userChannel = requesterUser.sc();
+            if (!loggedUsers.containsKey(peusdo) || !loggedUsers.containsKey(targetPeusdo)) return;
+            User requesterUser = loggedUsers.get(targetPeusdo);
+            ByteBuffer request = User.ProtocolEncoder.encodeKOPrivateRequest(peusdo, targetPeusdo, OPCODE.KO_PRIVATE.getCode());
+            SocketChannel userChannel = requesterUser.sc();
             if (userChannel.isOpen()) {
                 SelectionKey userKey = userChannel.keyFor(selector);
                 if (userKey != null) {
@@ -378,51 +353,40 @@ public class ChatVaBienServer {
                 }
             }
         }
-        
-        private ByteBuffer encodeKOPrivateRequest() {
-        	var resquesterBytes = UTF8.encode(peusdo);
-        	var targetBytes = UTF8.encode(targetPeusdo);
-        	
-        	ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + 
-        			Integer.BYTES + resquesterBytes.remaining() + 
-        			Integer.BYTES + targetBytes.remaining());
-        	
-        	bb.put(OPCODE.KO_PRIVATE.getCode());
-        	bb.putInt(resquesterBytes.remaining());
-        	bb.put(resquesterBytes);
-        	bb.putInt(targetBytes.remaining());
-        	bb.put(targetBytes);
-        	bb.flip();
-        	return bb;
-        }
-        
-        private ByteBuffer encodeUserList(String userList) {
-        	var encodedUserList = UTF8.encode(userList);
-            ByteBuffer bb = ByteBuffer.allocate(1 + Integer.BYTES + encodedUserList.remaining());
-            bb.put(OPCODE.CONNECTED_USERS_LIST.getCode()); // ou un autre opcode de réponse
-            bb.putInt(encodedUserList.remaining());
-            bb.put(encodedUserList);
-            bb.flip();
-            return bb;
-        }
-        
+
+        /**
+         * Sends a login status message to the client.
+         *
+         * @param accepted {@code true} if the login is accepted; {@code false} otherwise
+         */
         private void sendLoginStatus(boolean accepted) {
-            ByteBuffer bb = ByteBuffer.allocate(1);
-            bb.put(accepted ? OPCODE.LOGIN_ACCEPTED.getCode() : OPCODE.LOGIN_REFUSED.getCode());
-            bb.flip();
+            ByteBuffer bb = User.ProtocolEncoder.encodeLoginStatus(
+                    accepted,
+                    OPCODE.LOGIN_ACCEPTED.getCode(),
+                    OPCODE.LOGIN_REFUSED.getCode()
+            );
             queueMessage(bb);
         }
-        
+
+        /**
+         * Logs out the current user and cleans up the context.
+         */
         private void logout() {
-            if (peusdo != null) {
+            if (peusdo != null && loggedIn) {
                 loggedUsers.remove(peusdo);
                 logger.info("Déconnexion de " + peusdo);
                 broadcastMessage("Server", peusdo + " s'est déconnecté.");
+                loggedIn = false;
             }
         }
-        
+
+        /**
+         * Handles the response from the password/authentication server (ServerMDP).
+         *
+         * @param success whether the authentication was successful
+         * @param id      the authentication request ID
+         */
         public void onMDPResponse(boolean success, long id) {
-            // À adapter selon ce que tu veux faire après vérification
             if (opcode == OPCODE.LOGINAUTH.getCode()) {
                 if (success) {
                     handleLogin(); // valide
@@ -431,22 +395,24 @@ public class ChatVaBienServer {
                 }
             } else if (opcode == OPCODE.LOGIN.getCode()) {
                 if (success) {
-                    sendLoginStatus(false); // login déjà enregistré, refuse
+                    sendLoginStatus(false);
                 } else {
-                    handleLogin(); // accepte login
+                    handleLogin();
                 }
             }
         }
 
+        /**
+         * Processes input buffers according to the protocol state machine.
+         */
         private void processIn() {
-        	for (;;) {
+            for (; ; ) {
                 switch (state) {
                     case WAITING_OPCODE -> {
                         var status = opcodeReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
                             opcode = opcodeReader.get();
-                            logger.info("Opcode reçu: " + opcode);
-                            opcodeReader.reset();                           
+                            opcodeReader.reset();
                             state = State.WAITING_PEUSDO;
                         } else if (status == ProcessStatus.REFILL) {
                             return;
@@ -459,7 +425,6 @@ public class ChatVaBienServer {
                         var status = idReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
                             token = idReader.get();
-                            logger.info("Id reçu: " + token);
                             idReader.reset();
                             state = State.DONE;
                         } else if (status == ProcessStatus.REFILL) {
@@ -474,7 +439,6 @@ public class ChatVaBienServer {
                         if (status == ProcessStatus.DONE) {
                             clientIp = ipReader.get();
                             ipReader.reset();
-                            logger.info("IP reçue: " + clientIp.address().getHostAddress() + ":" + clientIp.port());
                             state = State.WAITING_ID;
                         } else if (status == ProcessStatus.REFILL) {
                             return;
@@ -486,16 +450,13 @@ public class ChatVaBienServer {
                     case WAITING_PEUSDO -> {
                         var status = stringReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
-                        	peusdo = stringReader.get();
+                            peusdo = stringReader.get();
                             stringReader.reset();
-                            logger.info("Peusdo reçu: " + peusdo);
                             if (opcode == OPCODE.MESSAGE.getCode()) {
                                 state = State.WAITING_MESSAGE;
-                            } 
-                            else if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.OK_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
-                            	state = State.WAITING_TARGET_PEUSDO;
-                            }
-                           else {
+                            } else if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.OK_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
+                                state = State.WAITING_TARGET_PEUSDO;
+                            } else {
                                 state = State.DONE;
                             }
                         } else if (status == ProcessStatus.REFILL) {
@@ -508,15 +469,13 @@ public class ChatVaBienServer {
                     case WAITING_TARGET_PEUSDO -> {
                         var status = stringReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
-                        	targetPeusdo = stringReader.get();
+                            targetPeusdo = stringReader.get();
                             stringReader.reset();
-                            logger.info("target Peusdo reçu: " + peusdo);
-                            if(opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
-                            	state = State.DONE;
+                            if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
+                                state = State.DONE;
                             } else if (opcode == OPCODE.OK_PRIVATE.getCode()) {
-                            	state = State.WAITING_IP;
+                                state = State.WAITING_IP;
                             }
-                            
                         } else if (status == ProcessStatus.REFILL) {
                             return;
                         } else {
@@ -529,7 +488,6 @@ public class ChatVaBienServer {
                         if (status == ProcessStatus.DONE) {
                             message = stringReader.get();
                             stringReader.reset();
-                            logger.info("Message reçu: " + message);
                             state = State.DONE;
                         } else if (status == ProcessStatus.REFILL) {
                             return;
@@ -539,100 +497,65 @@ public class ChatVaBienServer {
                         }
                     }
                     case DONE -> {
-                    	logger.info("Opcode: " + opcode);
-	                    Request request = switch (OPCODE.fromCode(opcode)) {
-	                        case LOGIN -> new LoginRequest();
-	                        case MESSAGE -> new MessageRequest(peusdo, message);
-	                        case GET_CONNECTED_USERS -> new GetUsersRequest();
-	                        case REQUEST_PRIVATE -> new PrivateRequest(peusdo, targetPeusdo);
-	                        case OK_PRIVATE -> new OKPrivateRequest(peusdo, targetPeusdo, token);
-	                        case KO_PRIVATE -> new KOPrivateResquest(peusdo, targetPeusdo);
-	                        default -> null;
-	                    };
-	
-	                    if (request != null) {
-	                        request.handle(this);
-	                    } else {
-	                        logger.warning("Unknown or unhandled opcode");
-	                    }
-	
-	                    state = State.WAITING_OPCODE;
+                        Request request = switch (OPCODE.fromCode(opcode)) {
+                            case LOGIN -> new LoginRequest();
+                            case MESSAGE -> new MessageRequest(peusdo, message);
+                            case GET_CONNECTED_USERS -> new GetUsersRequest();
+                            case REQUEST_PRIVATE -> new PrivateRequest(peusdo, targetPeusdo);
+                            case OK_PRIVATE -> new OKPrivateRequest(peusdo, targetPeusdo, token);
+                            case KO_PRIVATE -> new KOPrivateResquest(peusdo, targetPeusdo);
+                            default -> null;
+                        };
+
+                        if (request != null) {
+                            request.handle(this);
+                        } else {
+                            logger.warning("Unknown or unhandled opcode");
+                        }
+                        state = State.WAITING_OPCODE;
                     }
                     case ERROR -> {
                         closed = true;
                         return;
                     }
-				default -> throw new IllegalArgumentException("Unexpected value: " + state);
+                    default -> throw new IllegalArgumentException("Unexpected value: " + state);
                 }
             }
         }
-        
-        private ByteBuffer encodeBroadcastMessage(String sender, String message) {
-            var encodedMessage = UTF8.encode(message);
-            var encodedSender = UTF8.encode(sender);
-            var bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + encodedSender.remaining() + Integer.BYTES + encodedMessage.remaining());
-            bb.put(OPCODE.MESSAGE.getCode());
-            bb.putInt(encodedSender.remaining());
-            bb.put(encodedSender);
-            bb.putInt(encodedMessage.remaining());
-            bb.put(encodedMessage);
-            bb.flip();
-            return bb;
-        }
-        private static String dumpBuffer(ByteBuffer buffer) {
-            StringBuilder sb = new StringBuilder();
-            int pos = buffer.position();
-            int lim = buffer.limit();
-            for (int i = pos; i < lim; i++) {
-                byte b = buffer.get(i);
-                sb.append(String.format("%02X ", b));
-            }
-            sb.append(" | ");
-            for (int i = pos; i < lim; i++) {
-                byte b = buffer.get(i);
-                if (b >= 32 && b < 127) {
-                    sb.append((char) b);
-                } else {
-                    sb.append('.');
-                }
-            }
-            return sb.toString();
-        }
-        
-        private static String dumpBufferNum(ByteBuffer buffer) {
-            StringBuilder sb = new StringBuilder();
-            int pos = buffer.position();
-            int lim = buffer.limit();
-            for (int i = pos; i < lim; i++) {
-                byte b = buffer.get(i);
-                sb.append(String.format("%02X ", b));
-            }
-            sb.append(" | ");
-            for (int i = pos; i < lim; i++) {
-            	byte b = buffer.get(i);
-                sb.append((char) b);
-            }
-            return sb.toString();
-        }
-        
+
+
+        /**
+         * Broadcasts a message to all connected users except the sender.
+         *
+         * @param sender  the pseudonym of the sender
+         * @param message the message to broadcast
+         */
         public void broadcastMessage(String sender, String message) {
-            ByteBuffer bb = encodeBroadcastMessage(sender, message);
+            ByteBuffer bb = User.ProtocolEncoder.encodeBroadcastMessage(sender, message, OPCODE.MESSAGE.getCode());
             for (Map.Entry<String, User> entry : loggedUsers.entrySet()) {
-            	if (!entry.getKey().equals(sender)) {
-	                SocketChannel userChannel = entry.getValue().sc();
-	                if (userChannel.isOpen()) {
-	                    SelectionKey userKey = userChannel.keyFor(selector);
-	                    if (userKey != null) {
-	                        Context userContext = (Context) userKey.attachment();
-	                        userContext.queueMessage(bb.duplicate());
-	                    }
-	                }
-            	}
+                if (!entry.getKey().equals(sender)) {
+                    SocketChannel userChannel = entry.getValue().sc();
+                    if (userChannel.isOpen()) {
+                        SelectionKey userKey = userChannel.keyFor(selector);
+                        if (userKey != null) {
+                            Context userContext = (Context) userKey.attachment();
+                            userContext.queueMessage(bb.duplicate());
+                        }
+                    }
+                }
             }
         }
     }
-    
 
+
+    /**
+     * Entry point to launch the ChatVaBien server.
+     * <p>
+     * Usage: {@code java ChatVaBienServer <serverPort> <mdpPort>}
+     *
+     * @param args command-line arguments: server port and password server port
+     * @throws IOException if an I/O error occurs during server startup or execution
+     */
     public static void main(String[] args) throws IOException {
         if (args.length != 2) {
             System.err.println("Usage: java ChatVaBienServer <serverPort> <mdpPort>");
