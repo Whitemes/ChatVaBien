@@ -59,6 +59,7 @@ public class ClientTest {
     private PrivateRequest pendingPrompt = null;
     private boolean waitingForPrivateReply = false;
     private String userList = "";
+    private boolean shouldDisplayUserList = false;
     
     
     private static final Scanner scanner = new Scanner(System.in);
@@ -133,16 +134,12 @@ public class ClientTest {
                             return false;
                         }
                         System.out.println("Connexion privée confirmée !");
-                        
-                        // SUPPRIMÉ: Ne pas assigner activePrivateContext ici
-                        // activePrivateContext est déjà assigné dans doPrivateAccept() ou dans OK_PRIVATE
-                        
+                                                
                         privateSessionActive = true;
                         state = State.WAITING_OPCODE;
                     }
 
                     case WAITING_MESSAGE -> {
-                        // CORRECTION: Traiter d'abord le sender
                         var status = senderReader.process(bufferIn);
                         if (status == ProcessStatus.REFILL) {
                             bufferIn.compact();
@@ -155,13 +152,11 @@ public class ClientTest {
                         if (status == ProcessStatus.DONE) {
                             sender = senderReader.get();
                             senderReader.reset();
-                            // CORRECTION: Ne pas changer l'état ici, continuer avec le message
                         } else {
                             bufferIn.compact();
                             return true;
                         }
 
-                        // CORRECTION: Traiter ensuite le message
                         status = messageReader.process(bufferIn);
                         if (status == ProcessStatus.REFILL) {
                             bufferIn.compact();
@@ -176,7 +171,6 @@ public class ClientTest {
                             messageReader.reset();
                             System.out.println(sender + " (privé) : " + message);
                             state = State.WAITING_OPCODE;
-                            // CORRECTION: Continuer la boucle au lieu de return
                         } else {
                             bufferIn.compact();
                             return true;
@@ -189,17 +183,19 @@ public class ClientTest {
                             return true;
                         }
 
-                        int filenameLen = bufferIn.get() & 0xFF; // CORRECTION: Lecture en unsigned byte
+                        int filenameLen = bufferIn.get() & 0xFF;
                         if (bufferIn.remaining() < filenameLen + Integer.BYTES * 2) {
                             bufferIn.position(bufferIn.position() - 1);
                             bufferIn.compact();
                             return true;
                         }
 
-                        // CORRECTION: Lecture plus robuste du nom de fichier
-                        byte[] filenameBytes = new byte[filenameLen];
-                        bufferIn.get(filenameBytes);
-                        String filename = UTF8.decode(ByteBuffer.wrap(filenameBytes)).toString();
+                        ByteBuffer filenameBuffer = ByteBuffer.allocate(filenameLen);
+                        for (int i = 0; i < filenameLen; i++) {
+                            filenameBuffer.put(bufferIn.get());
+                        }
+                        filenameBuffer.flip();
+                        String filename = UTF8.decode(filenameBuffer).toString();
 
                         if (bufferIn.remaining() < Integer.BYTES * 2) {
                             bufferIn.position(bufferIn.position() - filenameLen - 1);
@@ -216,9 +212,11 @@ public class ClientTest {
                             return true;
                         }
 
-                        // CORRECTION: Traitement plus robuste des chunks
-                        byte[] chunkData = new byte[chunkSize];
-                        bufferIn.get(chunkData);
+                        ByteBuffer chunkBuffer = ByteBuffer.allocate(chunkSize);
+                        for (int i = 0; i < chunkSize; i++) {
+                            chunkBuffer.put(bufferIn.get());
+                        }
+                        chunkBuffer.flip();
 
                         if (!filename.equals(currentFileName)) {
                             if (currentFileOut != null) {
@@ -244,6 +242,8 @@ public class ClientTest {
                             System.out.println("Réception d'un fichier nommé : " + filename + " (" + totalSize + " octets)");
                         }
 
+                        byte[] chunkData = new byte[chunkBuffer.remaining()];
+                        chunkBuffer.get(chunkData);
                         currentFileOut.write(chunkData);
                         receivedBytes += chunkSize;
                         
@@ -278,16 +278,10 @@ public class ClientTest {
 	        PrivateContext context = new PrivateContext(scPrivate, expectedIncomingToken, fileDirectory);
 	        privateContexts.put(clientKey, context);
 
-	        // CORRECTION: Assigner activePrivateContext seulement s'il n'y en a pas déjà un
 	        if (activePrivateContext == null) {
 	            activePrivateContext = context;
 	            privateSocket = scPrivate;
 	            privateSessionActive = true;
-	            
-	            System.out.println("=== DEBUG doPrivateAccept ===");
-	            System.out.println("activePrivateContext assigné: " + (activePrivateContext != null));
-	            System.out.println("privateSessionActive: " + privateSessionActive);
-	            System.out.println("==============================");
 	        }
 	    }
 	}
@@ -312,16 +306,14 @@ public class ClientTest {
     }
 
     private static void doPrivateWrite(SelectionKey key) throws IOException {
-        // no-op pour maintenant, sauf si tu veux envoyer un message plus tard depuis ici
+        // no-op
     }
     
     private void resetPrivateSession() {
         System.out.println("Réinitialisation de la session privée...");
         
-        // Fermer le fichier en cours si il y en a un
         closeFileStream();
         
-        // Nettoyer les variables d'état
         activePrivateContext = null;
         privateSessionActive = false;
         privateTargetPeusdo = null;
@@ -330,7 +322,6 @@ public class ClientTest {
         privateToken = -1;
         expectedIncomingToken = -1;
         
-        // Fermer toutes les connexions privées ouvertes
         var keys = new ArrayList<>(privateContexts.keySet());
         for (SelectionKey key : keys) {
             silentlyClosePrivate(key);
@@ -364,7 +355,6 @@ public class ClientTest {
             logger.info("Fermeture silencieuse de la connexion privée.");
             PrivateContext context = privateContexts.get(key);
             
-            // CORRECTION: Si c'est la connexion active, la nettoyer
             if (context != null && context == activePrivateContext) {
                 activePrivateContext = null;
                 privateSessionActive = false;
@@ -414,8 +404,7 @@ public class ClientTest {
         ByteBuffer pseudoBuf = UTF8.encode(peusdo);
         ByteBuffer targetBuf = UTF8.encode(target);
         InetSocketAddress addr = (InetSocketAddress) ip.getLocalAddress();
-        byte[] ipBytes = addr.getAddress().getAddress(); // 4 ou 16 bytes
-        byte ipType = (byte) ipBytes.length;
+        ByteBuffer ipBuffer = ByteBuffer.wrap(addr.getAddress().getAddress());
 
         ByteBuffer bb = ByteBuffer.allocate(1024);
         bb.put(OPCODE.OK_PRIVATE.getCode());
@@ -423,8 +412,8 @@ public class ClientTest {
         bb.put(pseudoBuf);
         bb.putInt(targetBuf.remaining());
         bb.put(targetBuf);
-        bb.put((byte) ipBytes.length);
-        bb.put(ipBytes);
+        bb.put((byte) ipBuffer.remaining());
+        bb.put(ipBuffer);
         bb.putInt(port);
         bb.putLong(token);
 
@@ -491,16 +480,22 @@ public class ClientTest {
                 int senderLength = buffer.getInt();
                 if (buffer.remaining() < senderLength + Integer.BYTES) return;
 
-                byte[] senderBytes = new byte[senderLength];
-                buffer.get(senderBytes);
-                String sender = UTF8.decode(ByteBuffer.wrap(senderBytes)).toString();
+                ByteBuffer senderBuffer = ByteBuffer.allocate(senderLength);
+                for (int i = 0; i < senderLength; i++) {
+                    senderBuffer.put(buffer.get());
+                }
+                senderBuffer.flip();
+                String sender = UTF8.decode(senderBuffer).toString();
 
                 int targetLength = buffer.getInt();
                 if (buffer.remaining() < targetLength) return;
 
-                byte[] targetBytes = new byte[targetLength];
-                buffer.get(targetBytes);
-                String target = UTF8.decode(ByteBuffer.wrap(targetBytes)).toString();
+                ByteBuffer targetBuffer = ByteBuffer.allocate(targetLength);
+                for (int i = 0; i < targetLength; i++) {
+                    targetBuffer.put(buffer.get());
+                }
+                targetBuffer.flip();
+                String target = UTF8.decode(targetBuffer).toString();
 
                 pendingPrivateRequest = new PrivateRequest(sender, target);   
                 if (privateTargetPeusdo != null && sender.equals(privateTargetPeusdo)) {
@@ -512,14 +507,20 @@ public class ClientTest {
                 System.out.println("La connexion privée a été acceptée par le destinataire.");
 
                 int requesterLen = buffer.getInt();
-                byte[] requesterBytes = new byte[requesterLen];
-                buffer.get(requesterBytes);
-                String requester = UTF8.decode(ByteBuffer.wrap(requesterBytes)).toString();
+                ByteBuffer requesterBuffer = ByteBuffer.allocate(requesterLen);
+                for (int i = 0; i < requesterLen; i++) {
+                    requesterBuffer.put(buffer.get());
+                }
+                requesterBuffer.flip();
+                String requester = UTF8.decode(requesterBuffer).toString();
 
                 int targetLen = buffer.getInt();
-                byte[] targetBytes = new byte[targetLen];
-                buffer.get(targetBytes);
-                String target = UTF8.decode(ByteBuffer.wrap(targetBytes)).toString();
+                ByteBuffer targetBuffer = ByteBuffer.allocate(targetLen);
+                for (int i = 0; i < targetLen; i++) {
+                    targetBuffer.put(buffer.get());
+                }
+                targetBuffer.flip();
+                String target = UTF8.decode(targetBuffer).toString();
 
                 byte ipType = buffer.get();
                 int ipLength = switch (ipType) {
@@ -527,14 +528,18 @@ public class ClientTest {
                     case 16 -> 16;
                     default -> throw new IllegalArgumentException("Type IP inconnu: " + ipType);
                 };
-                byte[] ipBytes = new byte[ipLength];
-                buffer.get(ipBytes);
+                ByteBuffer ipBuffer = ByteBuffer.allocate(ipLength);
+                for (int i = 0; i < ipLength; i++) {
+                    ipBuffer.put(buffer.get());
+                }
+                ipBuffer.flip();
+                byte[] ipBytes = new byte[ipBuffer.remaining()];
+                ipBuffer.get(ipBytes);
                 InetAddress ipAddress = InetAddress.getByAddress(ipBytes);
 
                 int port = buffer.getInt();
                 long token = buffer.getLong();
 
-                // CORRECTION: Vérifier qu'on n'a pas déjà une session active
                 if (!hasOpenedPrivateSocket && requester != null && !requester.equals(peusdo) && !isPrivateSessionActive()) {
                     System.out.println("Connexion inversée : ouverture d'une socket vers " + requester);
 
@@ -549,15 +554,9 @@ public class ClientTest {
                     PrivateContext context = new PrivateContext(privateSocket, token, fileDirectory);
                     privateContexts.put(privateKey, context);
                     
-                    // CORRECTION: Assigner activePrivateContext seulement si pas déjà assigné
                     if (activePrivateContext == null) {
                         activePrivateContext = context;
                     }
-                    
-                    System.out.println("=== DEBUG OK_PRIVATE (connexion sortante) ===");
-                    System.out.println("activePrivateContext assigné: " + (activePrivateContext != null));
-                    System.out.println("privateSessionActive sera mis à true");
-                    System.out.println("===========================================");
 
                     ByteBuffer openMsg = ByteBuffer.allocate(9);
                     openMsg.put(OPCODE.OPEN.getCode());
@@ -587,16 +586,24 @@ public class ClientTest {
                     return;
                 }
 
-                byte[] listBytes = new byte[listLength];
-                buffer.get(listBytes);
-                String newUserList = UTF8.decode(ByteBuffer.wrap(listBytes)).toString();
+                ByteBuffer listBuffer = ByteBuffer.allocate(listLength);
+                for (int i = 0; i < listLength; i++) {
+                    listBuffer.put(buffer.get());
+                }
+                listBuffer.flip();
+                String newUserList = UTF8.decode(listBuffer).toString();
                 
-                // CORRECTION: Vérifier que la liste n'est pas vide avant de l'assigner
                 if (newUserList != null && !newUserList.isBlank()) {
-                    userList = newUserList.trim(); // Nettoyer les espaces
-                    System.out.println("Utilisateurs connectés :\n" + userList);
+                    userList = newUserList.trim();
+                    if (shouldDisplayUserList) {
+                        System.out.println("Utilisateurs connectés :\n" + userList);
+                        shouldDisplayUserList = false;
+                    }
                 } else {
-                    System.out.println("Aucun utilisateur connecté actuellement.");
+                    if (shouldDisplayUserList) {
+                        System.out.println("Aucun utilisateur connecté actuellement.");
+                        shouldDisplayUserList = false;
+                    }
                     userList = "";
                 }
             }
@@ -605,16 +612,22 @@ public class ClientTest {
                 int senderLength = buffer.getInt();
                 if (buffer.remaining() < senderLength + Integer.BYTES) return;
 
-                byte[] senderBytes = new byte[senderLength];
-                buffer.get(senderBytes);
-                String sender = UTF8.decode(ByteBuffer.wrap(senderBytes)).toString();
+                ByteBuffer senderBuffer = ByteBuffer.allocate(senderLength);
+                for (int i = 0; i < senderLength; i++) {
+                    senderBuffer.put(buffer.get());
+                }
+                senderBuffer.flip();
+                String sender = UTF8.decode(senderBuffer).toString();
 
                 int messageLength = buffer.getInt();
                 if (buffer.remaining() < messageLength) return;
 
-                byte[] msgBytes = new byte[messageLength];
-                buffer.get(msgBytes);
-                String message = UTF8.decode(ByteBuffer.wrap(msgBytes)).toString();
+                ByteBuffer msgBuffer = ByteBuffer.allocate(messageLength);
+                for (int i = 0; i < messageLength; i++) {
+                    msgBuffer.put(buffer.get());
+                }
+                msgBuffer.flip();
+                String message = UTF8.decode(msgBuffer).toString();
 
                 System.out.println(sender + " : " + message);
             }
@@ -630,9 +643,12 @@ public class ClientTest {
         sendLoginMessage(sc, opcodeToSend, id, peusdo);
         System.out.println("Tentative de connexion...");
         
-        // CORRECTION: Attendre un peu que la connexion soit établie avant de demander la liste
-        Thread.sleep(100);
+        Thread.sleep(300);
+        
         sendLoginMessage(sc, OPCODE.GET_CONNECTED_USERS.getCode(), id, peusdo);
+        System.out.println("Récupération de la liste des utilisateurs connectés...");
+        
+        Thread.sleep(200);
     }
     
     private boolean isUserConnected(String username) {
@@ -640,9 +656,7 @@ public class ClientTest {
             return false;
         }
         
-        // CORRECTION: Meilleure vérification - éviter les faux positifs
-        // Par exemple si on cherche "bob" et que la liste contient "bobby"
-        String[] users = userList.split("\\s+"); // Séparer par espaces/retours à la ligne
+        String[] users = userList.split("\\s+");
         for (String user : users) {
             if (user.trim().equals(username)) {
                 return true;
@@ -664,26 +678,31 @@ public class ClientTest {
         isSendingFile = true;
         System.out.println("Début d'envoi du fichier : " + filename);
 
-        // CORRECTION: Encoder correctement le nom de fichier
         ByteBuffer fileNameBuf = UTF8.encode(filename);
-        byte[] fileNameBytes = new byte[fileNameBuf.remaining()];
-        fileNameBuf.get(fileNameBytes);
+        ByteBuffer fileNameBuffer = ByteBuffer.allocate(fileNameBuf.remaining());
+        fileNameBuffer.put(fileNameBuf);
+        fileNameBuffer.flip();
         
         int totalSize = (int) file.length();
 
         try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
-            byte[] buffer = new byte[1024];
+            ByteBuffer dataBuffer = ByteBuffer.allocate(MAX_BUFFER_SIZE);
+            byte[] tempArray = new byte[MAX_BUFFER_SIZE];
             int bytesRead;
-            while ((bytesRead = in.read(buffer)) != -1) {
-                // CORRECTION: Taille correcte du ByteBuffer
-                ByteBuffer bb = ByteBuffer.allocate(1 + 1 + fileNameBytes.length + 4 + 4 + bytesRead);
+            while ((bytesRead = in.read(tempArray)) != -1) {
+                dataBuffer.clear();
+                dataBuffer.put(tempArray, 0, bytesRead);
+                dataBuffer.flip();
+                
+                ByteBuffer bb = ByteBuffer.allocate(1 + 1 + fileNameBuffer.remaining() + 4 + 4 + bytesRead);
 
                 bb.put(OPCODE.FILE.getCode());
-                bb.put((byte) fileNameBytes.length); // CORRECTION: Utiliser un byte pour la longueur
-                bb.put(fileNameBytes);
+                bb.put((byte) fileNameBuffer.remaining());
+                fileNameBuffer.rewind();
+                bb.put(fileNameBuffer);
                 bb.putInt(totalSize);
                 bb.putInt(bytesRead);
-                bb.put(buffer, 0, bytesRead);
+                bb.put(dataBuffer);
 
                 bb.flip();
                 while (bb.hasRemaining()) {
@@ -715,7 +734,7 @@ public class ClientTest {
     
     private void doMainRead(SelectionKey key) throws IOException {
         SocketChannel sc = (SocketChannel) key.channel();
-        ByteBuffer buffer = ByteBuffer.allocate(1024 * 8); // alloué à chaque lecture (ou à réutiliser)
+        ByteBuffer buffer = ByteBuffer.allocate(1024 * 8);
         int read = sc.read(buffer);
         if (read == -1) {
             System.out.println("Serveur a fermé la connexion.");
@@ -738,20 +757,15 @@ public class ClientTest {
         sendTextMessage(targetChannel, peusdo, line);
     }
     
-    private SocketChannel getActivePrivateChannel() {
-        return isPrivateSessionActive() ? activePrivateContext.sc : null;
-    }
-    
     private void handleUserCommand(String line) throws IOException {
         if (line == null || line.isBlank()) return;
 
-        // CORRECTION: Traiter pendingPrivateRequest AVANT waitingForPrivateReply
         if (pendingPrivateRequest != null && !waitingForPrivateReply) {
             pendingPrompt = pendingPrivateRequest;
             pendingPrivateRequest = null;
             waitingForPrivateReply = true;
             System.out.println("Demande de connexion privée reçue de : " + pendingPrompt.peusdoRequester() + ". Accepter ? (o/n)");
-            return; // IMPORTANT: Ne pas traiter la commande comme un message normal
+            return;
         }
 
         if (waitingForPrivateReply) {
@@ -768,7 +782,7 @@ public class ClientTest {
                     System.out.println("Connexion privée refusée.");
                 } else {
                     System.out.println("Réponse invalide. Tapez 'o' pour oui ou 'n' pour non.");
-                    return; // CORRECTION: Ne pas réinitialiser les variables si réponse invalide
+                    return;
                 }
             }
             pendingPrompt = null;
@@ -776,8 +790,8 @@ public class ClientTest {
             return;
         }
 
-        // Commandes système
         if (line.equalsIgnoreCase("/getusers")) {
+            shouldDisplayUserList = true;
             sendLoginMessage(MainSc, OPCODE.GET_CONNECTED_USERS.getCode(), System.currentTimeMillis(), peusdo);
             return;
         }
@@ -791,7 +805,6 @@ public class ClientTest {
             return;
         }
 
-        // CORRECTION: Ajouter commande pour fermer la session privée
         if (line.equalsIgnoreCase("/quit") || line.equalsIgnoreCase("/disconnect")) {
             if (isPrivateSessionActive()) {
                 System.out.println("Fermeture de la session privée avec " + privateTargetPeusdo);
@@ -802,7 +815,6 @@ public class ClientTest {
             return;
         }
 
-        // Demande de connexion privée
         if (line.startsWith("@")) {
             int spaceIndex = line.indexOf(' ');
             if (spaceIndex == -1 || spaceIndex == 1) {
@@ -815,15 +827,24 @@ public class ClientTest {
                 return;
             }
             
-            // CORRECTION: Vérifier qu'on n'a pas déjà une session active
             if (isPrivateSessionActive()) {
                 System.out.println("Vous avez déjà une session privée active avec " + privateTargetPeusdo + ". Tapez /quit pour la fermer.");
                 return;
             }
             
-            if (!isUserConnected(login)) {
-                System.out.println("Utilisateur inconnu ou déconnecté. Tapez /getusers pour mettre à jour la liste.");
-                return;
+            if (userList == null || userList.isBlank()) {
+                System.out.println("Actualisation de la liste des utilisateurs...");
+                sendLoginMessage(MainSc, OPCODE.GET_CONNECTED_USERS.getCode(), System.currentTimeMillis(), peusdo);
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            
+            if (userList != null && !userList.isBlank() && !isUserConnected(login)) {
+                System.out.println("Attention : " + login + " ne semble pas être dans la liste des utilisateurs connectés.");
+                System.out.println("Tentative d'envoi de la demande quand même...");
             }
             
             sendRequestPrivateMessage(MainSc, peusdo, login);
@@ -832,7 +853,6 @@ public class ClientTest {
             return;
         }
 
-        // Envoi de fichier
         if (line.startsWith("/")) {
             int spaceIndex = line.indexOf(' ');
             if (spaceIndex == -1 || spaceIndex == 1) {
@@ -863,7 +883,6 @@ public class ClientTest {
             return;
         }
 
-        // Message normal
         sendUserMessage(line);
     }
 
@@ -923,7 +942,6 @@ public class ClientTest {
             }).start();
 
             while (true) {
-                // CORRECTION: Gérer UNIQUEMENT mainSelector ici
                 if (mainSelector.selectNow() > 0) {
                     var iter = mainSelector.selectedKeys().iterator();
                     while (iter.hasNext()) {
@@ -936,7 +954,6 @@ public class ClientTest {
                     }
                 }
                 
-                // CORRECTION: Gérer UNIQUEMENT privateSelector ici
                 if (privateSelector.selectNow() > 0) {
                     var iter = privateSelector.selectedKeys().iterator();
                     while (iter.hasNext()) {
