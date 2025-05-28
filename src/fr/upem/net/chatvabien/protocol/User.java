@@ -33,7 +33,7 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
         public static ByteBuffer encodeBroadcastMessage(String sender, String message, byte opcode) {
             var encodedSender = UTF8.encode(sender);
             var encodedMessage = UTF8.encode(message);
-            ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + encodedSender.remaining() + Integer.BYTES + encodedMessage.remaining());
+            var bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + encodedSender.remaining() + Integer.BYTES + encodedMessage.remaining());
             bb.put(opcode);
             bb.putInt(encodedSender.remaining());
             bb.put(encodedSender);
@@ -54,7 +54,7 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
         public static ByteBuffer encodePrivateRequest(String from, String to, byte opcode) {
             var fromBytes = UTF8.encode(from);
             var toBytes = UTF8.encode(to);
-            ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + fromBytes.remaining() + Integer.BYTES + toBytes.remaining());
+            var bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + fromBytes.remaining() + Integer.BYTES + toBytes.remaining());
             bb.put(opcode);
             bb.putInt(fromBytes.remaining());
             bb.put(fromBytes);
@@ -78,11 +78,11 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
             var fromBytes = UTF8.encode(from);
             var toBytes = UTF8.encode(to);
 
-            byte[] rawIp = clientIp.address().getAddress();
-            byte ipType = clientIp.version();
-            int port = clientIp.port();
+            var rawIp = clientIp.address().getAddress();
+            var ipType = clientIp.version();
+            var port = clientIp.port();
 
-            ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES +
+            var bb = ByteBuffer.allocate(Byte.BYTES +
                     Integer.BYTES + fromBytes.remaining() +
                     Integer.BYTES + toBytes.remaining() +
                     Byte.BYTES + rawIp.length +
@@ -124,7 +124,7 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
          */
         public static ByteBuffer encodeUserList(String userList, byte opcode) {
             var encodedUserList = UTF8.encode(userList);
-            ByteBuffer bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + encodedUserList.remaining());
+            var bb = ByteBuffer.allocate(Byte.BYTES + Integer.BYTES + encodedUserList.remaining());
             bb.put(opcode);
             bb.putInt(encodedUserList.remaining());
             bb.put(encodedUserList);
@@ -141,7 +141,7 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
          * @return a {@link ByteBuffer} containing the encoded login status
          */
         public static ByteBuffer encodeLoginStatus(boolean accepted, byte opcodeAccepted, byte opcodeRefused) {
-            ByteBuffer bb = ByteBuffer.allocate(1);
+            var bb = ByteBuffer.allocate(1);
             bb.put(accepted ? opcodeAccepted : opcodeRefused);
             bb.flip();
             return bb;
