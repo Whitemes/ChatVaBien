@@ -1,0 +1,48 @@
+Refaire tout le client
+
+CONNECTION PRIVEE non bloquant :
+while write interdit en non bloquant
+connect interdit en non bloquant
+
+record Trame (obligatoire)
+
+selectNow interdit --> CPU attente active
+
+handle bof, pas de record request ca sert a rien si on a le record trame (je crois du moins que ça sert a rien)
+
+Code trop dupliqué
+
+1000 lignes de codes
+Il faut dupliquer
+
+Map il faut le mettre dans private context et mettre le ... (j'ai oublié)
+
+token pas fait :
+    Client - Server - Client
+
+Regarder dernier TP pour scanner (console)
+
+Pour fichiers deux queue (un message et un fichier)
+Pas de thread
+
+Quand connexion privée = Brodcast possible ET privée aussi
+
+Readers dans CLient !
+
+Il y a encorde des byte[].... (sauf IP)
+
+UN SEUL SELECTEUR
+
+Il faut stoker ou les client en attente de connection privée 
+
+Inutile l'interface Contexete dans serveur
+
+Pas sur : silentlyClosePrivate bizzare ?
+
+
+Login dans la connexion privée non ! il faut token pour identifier, ne pas stocker les login dans le client et se baser sur pour envoyer des messages privées ou faire des requetes privées car le client n'aurais jamais l'info des login a jour alors que le serveur si.
+Il faut passer par le seveur.
+
+Pas clair : Meme pour message privé ou fichier passer par serveur ???? Pourtant P2P... C'est pas clair
+
+Demander a Roland ou Romain (si ils peuvent) ou/et au Prof de l'aide sur la structure
