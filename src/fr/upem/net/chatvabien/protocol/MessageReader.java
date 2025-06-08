@@ -26,7 +26,6 @@ public class MessageReader implements Reader<Message> {
                 } else {
                     return statusLogin;
                 }
-                // FALLTHROUGH
             case WAITING_TEXT:
                 ProcessStatus statusText = stringReader.process(bb);
                 if (statusText == ProcessStatus.DONE) {

@@ -1,5 +1,7 @@
 package fr.upem.net.chatvabien.protocol;
 
+import java.nio.ByteBuffer;
+
 /**
  * Represents a request to initiate a login operation.
  */
@@ -14,4 +16,11 @@ public record LoginRequest() implements Request {
 	public void handle(ServerContext context) {
 		context.handleLogin();
 	}
+
+	@Override
+	public ByteBuffer toByteBuffer() {
+		// TODO Auto-generated method stub
+		return ByteBuffer.allocate(0);
+	}
+
 }
