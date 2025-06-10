@@ -1,5 +1,7 @@
 package fr.upem.net.chatvabien.protocol;
 
+import java.nio.ByteBuffer;
+
 /**
  * Represents a sealed protocol request in the ChatVaBien system.
  * <p>
@@ -19,7 +21,7 @@ package fr.upem.net.chatvabien.protocol;
  * </p>
  */
 public sealed interface Request
-        permits LoginRequest, MessageRequest, GetUsersRequest, PrivateRequest, OKPrivateRequest, KOPrivateResquest {
+        permits LoginRequest, MessageRequest, GetUsersRequest, PrivateRequest, OKPrivateRequest, KOPrivateResquest, Message {
 
     /**
      * Handles the request using the provided server context.
@@ -27,4 +29,6 @@ public sealed interface Request
      * @param context the server context used to process the request
      */
     void handle(ServerContext context);
+    
+    ByteBuffer toByteBuffer();
 }

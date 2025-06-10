@@ -237,6 +237,7 @@ public class ChatVaBienServer {
          * Processes the incoming data according to the protocol state machine.
          */
         void process() {
+        	logger.info(dumpBufferNum(bufferIn));
             processIn();
         }
 
@@ -401,6 +402,22 @@ public class ChatVaBienServer {
                 }
             }
         }
+        
+        private static String dumpBufferNum(ByteBuffer buffer) {
+            StringBuilder sb = new StringBuilder();
+            int pos = buffer.position();
+            int lim = buffer.limit();
+            for (int i = pos; i < lim; i++) {
+                byte b = buffer.get(i);
+                sb.append(String.format("%02X ", b));
+            }
+            sb.append(" | ");
+            for (int i = pos; i < lim; i++) {
+            	byte b = buffer.get(i);
+                sb.append((char) b);
+            }
+            return sb.toString();
+        }
 
         /**
          * Processes input buffers according to the protocol state machine.
@@ -414,6 +431,7 @@ public class ChatVaBienServer {
                             opcode = opcodeReader.get();
                             opcodeReader.reset();
                             state = State.WAITING_PEUSDO;
+                            logger.info(""+opcode);
                         } else if (status == ProcessStatus.REFILL) {
                             return;
                         } else {
@@ -459,6 +477,7 @@ public class ChatVaBienServer {
                             } else {
                                 state = State.DONE;
                             }
+                            logger.info(""+peusdo);
                         } else if (status == ProcessStatus.REFILL) {
                             return;
                         } else {
@@ -489,6 +508,7 @@ public class ChatVaBienServer {
                             message = stringReader.get();
                             stringReader.reset();
                             state = State.DONE;
+                            logger.info(""+message);
                         } else if (status == ProcessStatus.REFILL) {
                             return;
                         } else {
@@ -502,7 +522,7 @@ public class ChatVaBienServer {
                             case MESSAGE -> new MessageRequest(peusdo, message);
                             case GET_CONNECTED_USERS -> new GetUsersRequest();
                             case REQUEST_PRIVATE -> new PrivateRequest(peusdo, targetPeusdo);
-                            case OK_PRIVATE -> new OKPrivateRequest(peusdo, targetPeusdo, token);
+                            case OK_PRIVATE -> new OKPrivateRequest(peusdo, targetPeusdo, clientIp, token);
                             case KO_PRIVATE -> new KOPrivateResquest(peusdo, targetPeusdo);
                             default -> null;
                         };
