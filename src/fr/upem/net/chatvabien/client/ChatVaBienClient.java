@@ -152,9 +152,7 @@ public class ChatVaBienClient implements ServerMessageHandler {
             // ignore
         }
     }
-
     // ========== TRAITEMENT COMMANDES ==========
-
     private void processCommands() {
         String command;
         boolean hasCommand = false;
