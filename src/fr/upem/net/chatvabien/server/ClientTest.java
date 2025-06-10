@@ -3,8 +3,6 @@ package fr.upem.net.chatvabien.server;
 import fr.upem.net.chatvabien.protocol.LongReader;
 import fr.upem.net.chatvabien.protocol.StringReader;
 import fr.upem.net.chatvabien.protocol.OPCODE;
-import fr.upem.net.chatvabien.protocol.PrivateRequest;
-import fr.upem.net.chatvabien.protocol.User;
 import fr.upem.net.chatvabien.protocol.Reader.ProcessStatus;
 
 import java.io.*;
@@ -16,9 +14,7 @@ import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
@@ -36,7 +32,7 @@ public class ClientTest {
     private String peusdo;
     private String fileDirectory;
     private SocketChannel MainSc;
-    private PrivateRequest pendingPrivateRequest = null;
+    private PrivateRequestSimple pendingPrivateRequest = null;
     private SocketChannel privateSocket = null;
     private InetSocketAddress privateSocketAddress = null;
     private long privateToken = -1;
@@ -56,7 +52,7 @@ public class ClientTest {
     private boolean hasOpenedPrivateSocket = false;
     private static Selector mainSelector;
     private final ArrayBlockingQueue<String> commandQueue = new ArrayBlockingQueue<>(100);
-    private PrivateRequest pendingPrompt = null;
+    private PrivateRequestSimple pendingPrompt = null;
     private boolean waitingForPrivateReply = false;
     private String userList = "";
     private boolean shouldDisplayUserList = false;
@@ -497,7 +493,7 @@ public class ClientTest {
                 targetBuffer.flip();
                 String target = UTF8.decode(targetBuffer).toString();
 
-                pendingPrivateRequest = new PrivateRequest(sender, target);   
+                pendingPrivateRequest = new PrivateRequestSimple(sender, target);
                 if (privateTargetPeusdo != null && sender.equals(privateTargetPeusdo)) {
                     System.out.println("Connexion privée déjà en cours avec " + sender + ", pas de redemande nécessaire.");
                     return;

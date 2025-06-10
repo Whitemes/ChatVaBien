@@ -6,149 +6,119 @@ import java.nio.ByteBuffer;
 import java.nio.channels.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import fr.upem.net.chatvabien.protocol.*;
-import fr.upem.net.chatvabien.protocol.Reader.ProcessStatus;
 
 /**
- * Main server class for the ChatVaBien application.
- * <p>
- * This server manages user connections, authentication, message broadcasting,
- * private connections, and communication with an external password (MDP) server.
- * </p>
+ * Serveur ChatVaBien refactorisé selon les bonnes pratiques NIO
  */
 public class ChatVaBienServer {
     private static final Logger logger = Logger.getLogger(ChatVaBienServer.class.getName());
-    private static final int MAX_BUFFER_SIZE = 1024;
-
-    private final Map<String, User> loggedUsers = new ConcurrentHashMap<>();
+    private static final int BUFFER_SIZE = 1024;
 
     private final ServerSocketChannel serverSocketChannel;
     private final Selector selector;
+    private final Map<String, User> connectedUsers = new ConcurrentHashMap<>();
 
+    // Connexion MDP optionnelle
     private final SocketChannel mdpChannel;
-    private final SelectionKey mdpKey;
-    private final Map<Long, Context> pendingAuthRequests = new ConcurrentHashMap<>(); // pour lier réponse -> utilisateur
+    private final Map<Long, Context> pendingAuthRequests = new ConcurrentHashMap<>();
 
-    private final Random random = new Random();
-
-    /**
-     * Creates and initializes a new ChatVaBienServer.
-     *
-     * @param port       the TCP port to listen for client connections
-     * @param mdpAddress the address of the external password/authentication server
-     * @throws IOException if an I/O error occurs during server setup
-     */
     public ChatVaBienServer(int port, InetSocketAddress mdpAddress) throws IOException {
         this.serverSocketChannel = ServerSocketChannel.open();
         this.serverSocketChannel.bind(new InetSocketAddress(port));
         this.serverSocketChannel.configureBlocking(false);
+
         this.selector = Selector.open();
         this.serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
 
-        this.mdpChannel = SocketChannel.open();
-        this.mdpChannel.configureBlocking(false);
-        this.mdpChannel.connect(mdpAddress);
-        this.mdpKey = mdpChannel.register(selector, SelectionKey.OP_CONNECT | SelectionKey.OP_READ);
+        // Connexion MDP optionnelle
+        if (mdpAddress != null) {
+            this.mdpChannel = SocketChannel.open();
+            this.mdpChannel.configureBlocking(false);
+            this.mdpChannel.connect(mdpAddress);
+            this.mdpChannel.register(selector, SelectionKey.OP_CONNECT | SelectionKey.OP_READ);
+        } else {
+            this.mdpChannel = null;
+        }
     }
 
-    /**
-     * Starts the main server event loop, accepting and processing client connections and requests.
-     *
-     * @throws IOException if an I/O error occurs during server operation
-     */
     public void launch() throws IOException {
+        logger.info("Serveur ChatVaBien démarré");
+
         while (!Thread.interrupted()) {
-            selector.select();
-            Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
-            while (iter.hasNext()) {
-                SelectionKey key = iter.next();
-                try {
-                    if (key.channel() == mdpChannel) {
-                        if (key.isConnectable()) {
-                            if (mdpChannel.finishConnect()) {
-                                logger.info("Connecté à ServerMDP");
-                            }
-                        }
-                        if (key.isReadable()) {
-                            handleMDPResponse();
-                        }
-                        iter.remove();
-                        continue;
-                    }
-                    if (key.isValid() && key.isAcceptable()) {
-                        doAccept(key);
-                    }
-                    if (key.isValid() && key.isReadable()) {
-                        doRead(key);
-                    }
-                    if (key.isValid() && key.isWritable()) {
-                        doWrite(key);
-                    }
-                } catch (IOException e) {
-                    System.err.println("Connection closed with client due to error: " + e.getMessage());
-                    silentlyClose(key);
-                }
-                iter.remove();
+            selector.select(this::treatKey);
+        }
+    }
+
+    private void treatKey(SelectionKey key) {
+        try {
+            if (key.channel() == mdpChannel) {
+                handleMDPKey(key);
+                return;
+            }
+
+            if (key.isValid() && key.isAcceptable()) {
+                doAccept(key);
+            }
+            if (key.isValid() && key.isWritable()) {
+                ((Context) key.attachment()).doWrite();
+            }
+            if (key.isValid() && key.isReadable()) {
+                ((Context) key.attachment()).doRead();
+            }
+        } catch (IOException e) {
+            logger.warning("Connexion fermée: " + e.getMessage());
+            silentlyClose(key);
+        }
+    }
+
+    private void doAccept(SelectionKey key) throws IOException {
+        var clientChannel = serverSocketChannel.accept();
+        if (clientChannel == null) return;
+
+        clientChannel.configureBlocking(false);
+        var clientKey = clientChannel.register(selector, SelectionKey.OP_READ);
+        clientKey.attach(new Context(clientKey));
+
+        logger.info("Nouvelle connexion acceptée");
+    }
+
+    private void handleMDPKey(SelectionKey key) throws IOException {
+        if (key.isConnectable()) {
+            if (mdpChannel.finishConnect()) {
+                logger.info("Connecté au serveur MDP");
+            }
+        }
+        if (key.isReadable()) {
+            handleMDPResponse();
+        }
+    }
+
+    private void handleMDPResponse() throws IOException {
+        var buffer = ByteBuffer.allocate(1024);
+        var read = mdpChannel.read(buffer);
+        if (read == -1) {
+            throw new IOException("Connexion MDP fermée");
+        }
+
+        buffer.flip();
+        while (buffer.remaining() >= 9) { // 1 byte status + 8 bytes id
+            var status = buffer.get();
+            var id = buffer.getLong();
+            var context = pendingAuthRequests.remove(id);
+            if (context != null) {
+                context.onAuthResponse(status == 1);
             }
         }
     }
 
-    /**
-     * Accepts a new client connection and registers it with the selector.
-     *
-     * @param key the selection key corresponding to the server socket channel
-     * @throws IOException if an I/O error occurs while accepting the connection
-     */
-    private void doAccept(SelectionKey key) throws IOException {
-        var sc = serverSocketChannel.accept();
-        if (sc == null) return;
-        sc.configureBlocking(false);
-        var clientKey = sc.register(selector, SelectionKey.OP_READ);
-        clientKey.attach(new Context(clientKey, loggedUsers, selector));
-    }
-
-    /**
-     * Handles reading data from a client connection.
-     *
-     * @param key the selection key corresponding to the client socket channel
-     * @throws IOException if an I/O error occurs while reading from the client
-     */
-    private void doRead(SelectionKey key) throws IOException {
-        var context = (Context) key.attachment();
-        context.doRead();
-        if (context.isClosed()) {
-            silentlyClose(key);
-        }
-    }
-
-    /**
-     * Handles writing data to a client connection.
-     *
-     * @param key the selection key corresponding to the client socket channel
-     * @throws IOException if an I/O error occurs while writing to the client
-     */
-    private void doWrite(SelectionKey key) throws IOException {
-        var context = (Context) key.attachment();
-        context.doWrite();
-        if (context.isClosed()) {
-            silentlyClose(key);
-        }
-    }
-
-
-    /**
-     * Closes a client connection and removes it from the active users list.
-     *
-     * @param key the selection key corresponding to the client socket channel
-     */
     private void silentlyClose(SelectionKey key) {
         try {
             var context = (Context) key.attachment();
             if (context != null) {
-                context.logout();
+                context.cleanup();
             }
             key.channel().close();
         } catch (IOException e) {
@@ -157,253 +127,27 @@ public class ChatVaBienServer {
     }
 
     /**
-     * Handles the response from the external password/authentication server (ServerMDP).
-     *
-     * @throws IOException if an I/O error occurs while reading from the authentication server
+     * Contexte client simplifié - plus d'interface inutile
      */
-    private void handleMDPResponse() throws IOException {
-        var buffer = ByteBuffer.allocate(1024);
-        var read = mdpChannel.read(buffer);
-        if (read == -1) throw new IOException("Connexion fermée par ServerMDP");
-        buffer.flip();
-        while (buffer.remaining() >= 9) {
-            var status = buffer.get();
-            var id = buffer.getLong();
-            var ctx = pendingAuthRequests.remove(id);
-            if (ctx != null) {
-                ctx.onMDPResponse(status == 1, id);
-            }
-        }
-    }
-    /**
-     * Represents the context for a single client connection.
-     * <p>
-     * Handles the state, input/output buffers, and protocol logic for each client.
-     * Implements the {@link fr.upem.net.chatvabien.protocol.ServerContext} interface.
-     */
-    private class Context implements ServerContext{
-        private final SocketChannel sc;
+    private class Context implements ServerMessageProcessor {
         private final SelectionKey key;
-        private final Selector selector;
-        private final ByteBuffer bufferIn = ByteBuffer.allocate(MAX_BUFFER_SIZE);
-        private final Queue<ByteBuffer> queueOut = new ArrayDeque<>();
-        private final ByteReader opcodeReader = new ByteReader();
-        private final StringReader stringReader = new StringReader();
-        private final IpReader ipReader = new IpReader();
-        private final LongReader idReader = new LongReader();
+        private final SocketChannel sc;
+        private final ByteBuffer bufferIn = ByteBuffer.allocate(BUFFER_SIZE);
+        private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
+        private final Queue<Trame> outQueue = new ArrayDeque<>();
 
-        private enum State {WAITING_OPCODE, WAITING_ID, WAITING_IP, WAITING_PEUSDO, WAITING_TARGET_PEUSDO, WAITING_MESSAGE, DONE, ERROR}
-        private State state = State.WAITING_OPCODE;
-        private byte opcode;
-        private String message;
-        private String peusdo;
-        private String targetPeusdo;
-        private long token;
-        private Ip clientIp;
+        private final TrameReader trameReader = new TrameReader();
 
+        private String pseudo;
+        private boolean authenticated = false;
         private boolean closed = false;
-        private boolean loggedIn = false;
 
-        /**
-         * Constructs a new context for a client connection.
-         *
-         * @param key         the selection key associated with the client socket channel
-         * @param loggedUsers the map of currently logged-in users
-         * @param selector    the selector managing all channels
-         */
-        Context(SelectionKey key, Map<String, User> loggedUsers, Selector selector) {
+        Context(SelectionKey key) {
             this.key = key;
             this.sc = (SocketChannel) key.channel();
-            this.selector = selector;
         }
 
-        /**
-         * Reads data from the client channel and processes incoming requests.
-         *
-         * @throws IOException if an I/O error occurs while reading
-         */
-        void doRead() throws IOException {
-            var read = sc.read(bufferIn);
-            if (read == -1) {
-                closed = true;
-                return;
-            }
-            bufferIn.flip();
-            process();
-            bufferIn.compact();
-        }
-
-        /**
-         * Processes the incoming data according to the protocol state machine.
-         */
-        void process() {
-        	logger.info(dumpBufferNum(bufferIn));
-            processIn();
-        }
-
-        /**
-         * Writes any pending messages to the client channel.
-         *
-         * @throws IOException if an I/O error occurs during writing
-         */
-        void doWrite() throws IOException {
-            while (!queueOut.isEmpty()) {
-                var current = queueOut.peek();
-                sc.write(current);
-                if (current.hasRemaining()) {
-                    break;
-                }
-                queueOut.remove();
-            }
-            if (queueOut.isEmpty()) {
-                key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
-            }
-        }
-
-        /**
-         * Queues a message to be sent to the client.
-         *
-         * @param bb the buffer containing the message to send
-         */
-        void queueMessage(ByteBuffer bb) {
-            queueOut.add(bb.duplicate());
-            updateInterestOps();
-        }
-
-        /**
-         * Updates the interest operations for the selector, registering OP_WRITE if needed.
-         */
-        void updateInterestOps() {
-            var ops = SelectionKey.OP_READ;
-            if (!queueOut.isEmpty()) {
-                ops |= SelectionKey.OP_WRITE;
-            }
-            key.interestOps(ops);
-        }
-
-
-        /**
-         * Checks if the client connection is closed.
-         *
-         * @return {@code true} if closed; {@code false} otherwise
-         */
-        boolean isClosed() {
-            return closed;
-        }
-
-
-        public void handleLogin() {
-            if (loggedUsers.containsKey(peusdo)) {
-                sendLoginStatus(false);
-            } else {
-                var newUser = new User(random.nextLong(), peusdo, sc, false);
-                loggedUsers.put(newUser.pseudo(), newUser);
-                loggedIn = true;
-                sendLoginStatus(true);
-                broadcastMessage("Server", peusdo + " vient de se connecter.");
-            }
-        }
-
-        public void handleGetUsers() {
-            var sb = new StringBuilder();
-            for (String pseudo : loggedUsers.keySet()) {
-                sb.append(pseudo).append("\n");
-            }
-            var response = User.ProtocolEncoder.encodeUserList(sb.toString(), OPCODE.CONNECTED_USERS_LIST.getCode());
-            queueMessage(response);
-        }
-
-        public void handlePrivateRequest() {
-            if (!loggedUsers.containsKey(peusdo) || !loggedUsers.containsKey(targetPeusdo)) return;
-            var targetUser = loggedUsers.get(targetPeusdo);
-            var request = User.ProtocolEncoder.encodePrivateRequest(peusdo, targetPeusdo, OPCODE.REQUEST_PRIVATE.getCode());
-            SocketChannel userChannel = targetUser.sc();
-            if (userChannel.isOpen()) {
-                SelectionKey userKey = userChannel.keyFor(selector);
-                if (userKey != null) {
-                    Context userContext = (Context) userKey.attachment();
-                    userContext.queueMessage(request.duplicate());
-                }
-            }
-        }
-
-        public void handleOKPrivateRequest() {
-            if (!loggedUsers.containsKey(peusdo) || !loggedUsers.containsKey(targetPeusdo)) return;
-            var requesterUser = loggedUsers.get(targetPeusdo);
-            var request = User.ProtocolEncoder.encodeOKPrivateRequest(peusdo, targetPeusdo, clientIp, token, OPCODE.OK_PRIVATE.getCode());
-            var userChannel = requesterUser.sc();
-            if (userChannel.isOpen()) {
-                var userKey = userChannel.keyFor(selector);
-                if (userKey != null) {
-                    var userContext = (Context) userKey.attachment();
-                    userContext.queueMessage(request.duplicate());
-                }
-            }
-        }
-
-        public void handleKOPrivateRequest() {
-            if (!loggedUsers.containsKey(peusdo) || !loggedUsers.containsKey(targetPeusdo)) return;
-            var requesterUser = loggedUsers.get(targetPeusdo);
-            var request = User.ProtocolEncoder.encodeKOPrivateRequest(peusdo, targetPeusdo, OPCODE.KO_PRIVATE.getCode());
-            var userChannel = requesterUser.sc();
-            if (userChannel.isOpen()) {
-                var userKey = userChannel.keyFor(selector);
-                if (userKey != null) {
-                    Context userContext = (Context) userKey.attachment();
-                    userContext.queueMessage(request.duplicate());
-                }
-            }
-        }
-
-        /**
-         * Sends a login status message to the client.
-         *
-         * @param accepted {@code true} if the login is accepted; {@code false} otherwise
-         */
-        private void sendLoginStatus(boolean accepted) {
-            var bb = User.ProtocolEncoder.encodeLoginStatus(
-                    accepted,
-                    OPCODE.LOGIN_ACCEPTED.getCode(),
-                    OPCODE.LOGIN_REFUSED.getCode()
-            );
-            queueMessage(bb);
-        }
-
-        /**
-         * Logs out the current user and cleans up the context.
-         */
-        private void logout() {
-            if (peusdo != null && loggedIn) {
-                loggedUsers.remove(peusdo);
-                logger.info("Déconnexion de " + peusdo);
-                broadcastMessage("Server", peusdo + " s'est déconnecté.");
-                loggedIn = false;
-            }
-        }
-
-        /**
-         * Handles the response from the password/authentication server (ServerMDP).
-         *
-         * @param success whether the authentication was successful
-         * @param id      the authentication request ID
-         */
-        public void onMDPResponse(boolean success, long id) {
-            if (opcode == OPCODE.LOGINAUTH.getCode()) {
-                if (success) {
-                    handleLogin(); // valide
-                } else {
-                    sendLoginStatus(false);
-                }
-            } else if (opcode == OPCODE.LOGIN.getCode()) {
-                if (success) {
-                    sendLoginStatus(false);
-                } else {
-                    handleLogin();
-                }
-            }
-        }
-        
-        private static String dumpBufferNum(ByteBuffer buffer) {
+        private static String dumpBuffer(ByteBuffer buffer) {
             StringBuilder sb = new StringBuilder();
             int pos = buffer.position();
             int lim = buffer.limit();
@@ -411,182 +155,234 @@ public class ChatVaBienServer {
                 byte b = buffer.get(i);
                 sb.append(String.format("%02X ", b));
             }
-            sb.append(" | ");
-            for (int i = pos; i < lim; i++) {
-            	byte b = buffer.get(i);
-                sb.append((char) b);
-            }
             return sb.toString();
         }
 
-        /**
-         * Processes input buffers according to the protocol state machine.
-         */
-        private void processIn() {
-            for (; ; ) {
-                switch (state) {
-                    case WAITING_OPCODE -> {
-                        var status = opcodeReader.process(bufferIn);
-                        if (status == ProcessStatus.DONE) {
-                            opcode = opcodeReader.get();
-                            opcodeReader.reset();
-                            state = State.WAITING_PEUSDO;
-                            logger.info(""+opcode);
-                        } else if (status == ProcessStatus.REFILL) {
-                            return;
-                        } else {
-                            closed = true;
-                            return;
-                        }
-                    }
-                    case WAITING_ID -> {
-                        var status = idReader.process(bufferIn);
-                        if (status == ProcessStatus.DONE) {
-                            token = idReader.get();
-                            idReader.reset();
-                            state = State.DONE;
-                        } else if (status == ProcessStatus.REFILL) {
-                            return;
-                        } else {
-                            closed = true;
-                            return;
-                        }
-                    }
-                    case WAITING_IP -> {
-                        var status = ipReader.process(bufferIn);
-                        if (status == ProcessStatus.DONE) {
-                            clientIp = ipReader.get();
-                            ipReader.reset();
-                            state = State.WAITING_ID;
-                        } else if (status == ProcessStatus.REFILL) {
-                            return;
-                        } else {
-                            closed = true;
-                            return;
-                        }
-                    }
-                    case WAITING_PEUSDO -> {
-                        var status = stringReader.process(bufferIn);
-                        if (status == ProcessStatus.DONE) {
-                            peusdo = stringReader.get();
-                            stringReader.reset();
-                            if (opcode == OPCODE.MESSAGE.getCode()) {
-                                state = State.WAITING_MESSAGE;
-                            } else if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.OK_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
-                                state = State.WAITING_TARGET_PEUSDO;
-                            } else {
-                                state = State.DONE;
-                            }
-                            logger.info(""+peusdo);
-                        } else if (status == ProcessStatus.REFILL) {
-                            return;
-                        } else {
-                            closed = true;
-                            return;
-                        }
-                    }
-                    case WAITING_TARGET_PEUSDO -> {
-                        var status = stringReader.process(bufferIn);
-                        if (status == ProcessStatus.DONE) {
-                            targetPeusdo = stringReader.get();
-                            stringReader.reset();
-                            if (opcode == OPCODE.REQUEST_PRIVATE.getCode() || opcode == OPCODE.KO_PRIVATE.getCode()) {
-                                state = State.DONE;
-                            } else if (opcode == OPCODE.OK_PRIVATE.getCode()) {
-                                state = State.WAITING_IP;
-                            }
-                        } else if (status == ProcessStatus.REFILL) {
-                            return;
-                        } else {
-                            closed = true;
-                            return;
-                        }
-                    }
-                    case WAITING_MESSAGE -> {
-                        var status = stringReader.process(bufferIn);
-                        if (status == ProcessStatus.DONE) {
-                            message = stringReader.get();
-                            stringReader.reset();
-                            state = State.DONE;
-                            logger.info(""+message);
-                        } else if (status == ProcessStatus.REFILL) {
-                            return;
-                        } else {
-                            closed = true;
-                            return;
-                        }
-                    }
-                    case DONE -> {
-                        Request request = switch (OPCODE.fromCode(opcode)) {
-                            case LOGIN -> new LoginRequest();
-                            case MESSAGE -> new MessageRequest(peusdo, message);
-                            case GET_CONNECTED_USERS -> new GetUsersRequest();
-                            case REQUEST_PRIVATE -> new PrivateRequest(peusdo, targetPeusdo);
-                            case OK_PRIVATE -> new OKPrivateRequest(peusdo, targetPeusdo, clientIp, token);
-                            case KO_PRIVATE -> new KOPrivateResquest(peusdo, targetPeusdo);
-                            default -> null;
-                        };
 
-                        if (request != null) {
-                            request.handle(this);
-                        } else {
-                            logger.warning("Unknown or unhandled opcode");
-                        }
-                        state = State.WAITING_OPCODE;
-                    }
-                    case ERROR -> {
-                        closed = true;
-                        return;
-                    }
-                    default -> throw new IllegalArgumentException("Unexpected value: " + state);
+        void doRead() throws IOException {
+            var read = sc.read(bufferIn);
+            logger.info("Bytes lus: " + read); // <-- AJOUTEZ ça
+            if (read == -1) {
+                closed = true;
+                return;
+            }
+
+            if (read > 0) {
+                logger.info("Contenu buffer: " + dumpBuffer(bufferIn)); // <-- ET ça
+                processIn();
+            }
+            updateInterestOps();
+        }
+        void doWrite() throws IOException {
+            processOut();
+
+            bufferOut.flip();
+            sc.write(bufferOut);
+            bufferOut.compact();
+
+            updateInterestOps();
+        }
+
+        private void processIn() {
+            bufferIn.flip();
+
+            while (true) {
+                var status = trameReader.process(bufferIn);
+                if (status == Reader.ProcessStatus.DONE) {
+                    var trame = trameReader.get();
+                    handleTrame(trame);
+                    trameReader.reset();
+                } else if (status == Reader.ProcessStatus.REFILL) {
+                    break;
+                } else {
+                    closed = true;
+                    break;
+                }
+            }
+
+            bufferIn.compact();
+        }
+
+        private void handleTrame(Trame trame) {
+            // Validation pseudo
+            if (pseudo == null) {
+                pseudo = trame.sender();
+            } else if (!pseudo.equals(trame.sender())) {
+                logger.warning("Pseudo incohérent: " + trame.sender());
+                closed = true;
+                return;
+            }
+
+            // Traitement polymorphe du message
+            trame.message().process(this);
+        }
+
+        private void processOut() {
+            while (bufferOut.hasRemaining() && !outQueue.isEmpty()) {
+                var trame = outQueue.peek();
+                var buffer = trame.toByteBuffer();
+
+                if (bufferOut.remaining() >= buffer.remaining()) {
+                    bufferOut.put(buffer);
+                    outQueue.poll();
+                } else {
+                    break;
                 }
             }
         }
 
+        private void queueResponse(OPCODE opcode, Message message) {
+            outQueue.offer(Trame.serverResponse(opcode, message));
+            updateInterestOps();
+        }
 
-        /**
-         * Broadcasts a message to all connected users except the sender.
-         *
-         * @param sender  the pseudonym of the sender
-         * @param message the message to broadcast
-         */
-        public void broadcastMessage(String sender, String message) {
-            var bb = User.ProtocolEncoder.encodeBroadcastMessage(sender, message, OPCODE.MESSAGE.getCode());
-            for (Map.Entry<String, User> entry : loggedUsers.entrySet()) {
-                if (!entry.getKey().equals(sender)) {
-                    var userChannel = entry.getValue().sc();
-                    if (userChannel.isOpen()) {
-                        var userKey = userChannel.keyFor(selector);
-                        if (userKey != null) {
-                            var userContext = (Context) userKey.attachment();
-                            userContext.queueMessage(bb.duplicate());
-                        }
-                    }
+        private void updateInterestOps() {
+            var ops = SelectionKey.OP_READ;
+            if (!outQueue.isEmpty() || bufferOut.position() > 0) {
+                ops |= SelectionKey.OP_WRITE;
+            }
+            key.interestOps(ops);
+        }
+
+        void cleanup() {
+            if (pseudo != null && authenticated) {
+                connectedUsers.remove(pseudo);
+                broadcastUserDisconnection(pseudo);
+            }
+        }
+
+        void onAuthResponse(boolean success) {
+            if (success && !connectedUsers.containsKey(pseudo)) {
+                var user = new User(System.currentTimeMillis(), pseudo, sc, true);
+                connectedUsers.put(pseudo, user);
+                authenticated = true;
+                queueResponse(OPCODE.LOGIN_ACCEPTED, new LoginMessage());
+                broadcastUserConnection(pseudo);
+            } else {
+                queueResponse(OPCODE.LOGIN_REFUSED, new LoginMessage());
+            }
+        }
+
+        // ========== IMPLÉMENTATION ServerMessageProcessor ==========
+
+        @Override
+        public void processLogin() {
+            if (connectedUsers.containsKey(pseudo)) {
+                queueResponse(OPCODE.LOGIN_REFUSED, new LoginMessage());
+            } else {
+                // Authentification simple sans MDP
+                var user = new User(System.currentTimeMillis(), pseudo, sc, false);
+                connectedUsers.put(pseudo, user);
+                authenticated = true;
+                queueResponse(OPCODE.LOGIN_ACCEPTED, new LoginMessage());
+                broadcastUserConnection(pseudo);
+                logger.info(pseudo + " s'est connecté");
+            }
+        }
+
+        @Override
+        public void processPublicMessage(String text) {
+            if (!authenticated) {
+                logger.warning("Message non authentifié de " + pseudo);
+                return;
+            }
+
+            broadcast(pseudo, text);
+        }
+
+        @Override
+        public void processPrivateRequest(String targetPseudo) {
+            var targetUser = connectedUsers.get(targetPseudo);
+            if (targetUser == null) {
+                logger.warning("Utilisateur cible introuvable: " + targetPseudo);
+                return;
+            }
+
+            // Transmettre la demande au destinataire
+            var targetKey = targetUser.sc().keyFor(selector);
+            if (targetKey != null) {
+                var targetContext = (Context) targetKey.attachment();
+                var request = new PrivateRequestMessage(pseudo); // sender devient target
+                targetContext.queueResponse(OPCODE.REQUEST_PRIVATE, request);
+            }
+        }
+
+        @Override
+        public void processOKPrivate(String targetPseudo, InetSocketAddress address, long token) {
+            var targetUser = connectedUsers.get(targetPseudo);
+            if (targetUser == null) return;
+
+            var targetKey = targetUser.sc().keyFor(selector);
+            if (targetKey != null) {
+                var targetContext = (Context) targetKey.attachment();
+                var response = new OKPrivateMessage(pseudo, address, token);
+                targetContext.queueResponse(OPCODE.OK_PRIVATE, response);
+            }
+        }
+
+        @Override
+        public void processKOPrivate(String targetPseudo) {
+            var targetUser = connectedUsers.get(targetPseudo);
+            if (targetUser == null) return;
+
+            var targetKey = targetUser.sc().keyFor(selector);
+            if (targetKey != null) {
+                var targetContext = (Context) targetKey.attachment();
+                var response = new KOPrivateMessage(pseudo);
+                targetContext.queueResponse(OPCODE.KO_PRIVATE, response);
+            }
+        }
+
+        @Override
+        public void processGetUsers() {
+            var userList = String.join("\n", connectedUsers.keySet());
+            // Créer un message avec la liste des utilisateurs
+            var response = new PublicMessage(userList); // Réutilise PublicMessage
+            queueResponse(OPCODE.CONNECTED_USERS_LIST, response);
+        }
+    }
+
+    // ========== MÉTHODES DE BROADCAST ==========
+
+    private void broadcast(String sender, String message) {
+        var broadcastMessage = new PublicMessage(message);
+        var trame = Trame.clientMessage(OPCODE.MESSAGE, sender, broadcastMessage);
+
+        for (var user : connectedUsers.values()) {
+            if (!user.pseudo().equals(sender)) {
+                var key = user.sc().keyFor(selector);
+                if (key != null) {
+                    var context = (Context) key.attachment();
+                    context.outQueue.offer(trame);
+                    context.updateInterestOps();
                 }
             }
         }
     }
 
+    private void broadcastUserConnection(String pseudo) {
+        broadcast("Server", pseudo + " s'est connecté");
+    }
 
-    /**
-     * Entry point to launch the ChatVaBien server.
-     * <p>
-     * Usage: {@code java ChatVaBienServer <serverPort> <mdpPort>}
-     *
-     * @param args command-line arguments: server port and password server port
-     * @throws IOException if an I/O error occurs during server startup or execution
-     */
+    private void broadcastUserDisconnection(String pseudo) {
+        broadcast("Server", pseudo + " s'est déconnecté");
+    }
+
+    // ========== POINT D'ENTRÉE ==========
+
     public static void main(String[] args) throws IOException {
-        if (args.length != 2) {
-            System.err.println("Usage: java ChatVaBienServer <serverPort> <mdpPort>");
+        if (args.length < 1) {
+            System.err.println("Usage: java ChatVaBienServer <port> [mdpPort]");
             return;
         }
 
         var serverPort = Integer.parseInt(args[0]);
-        var mdpPort = Integer.parseInt(args[1]);
+        InetSocketAddress mdpAddress = null;
 
-        var mdpAddress = new InetSocketAddress("localhost", mdpPort);
-        logger.log(Level.INFO, "Server launched");
+        if (args.length >= 2) {
+            var mdpPort = Integer.parseInt(args[1]);
+            mdpAddress = new InetSocketAddress("localhost", mdpPort);
+        }
 
         new ChatVaBienServer(serverPort, mdpAddress).launch();
     }

@@ -3,14 +3,14 @@ package fr.upem.net.chatvabien.protocol;
 import java.nio.ByteBuffer;
 import java.util.Objects;
 
-public class MessageReader implements Reader<Message> {
+public class MessageReader implements Reader<PublicMessage> {
     private enum State { WAITING_LOGIN, WAITING_TEXT, DONE, ERROR }
 
     private State state = State.WAITING_LOGIN;
     private final StringReader stringReader = new StringReader();
     private String login;
     private String text;
-    private Message message;
+    private PublicMessage message;
 
     @Override
     public ProcessStatus process(ByteBuffer bb) {
@@ -31,7 +31,7 @@ public class MessageReader implements Reader<Message> {
                 if (statusText == ProcessStatus.DONE) {
                     text = stringReader.get();
                     stringReader.reset();
-                    message = new Message(login, text);
+                    message = new PublicMessage(text);
                     state = State.DONE;
                     return ProcessStatus.DONE;
                 } else {
@@ -45,7 +45,7 @@ public class MessageReader implements Reader<Message> {
     }
 
     @Override
-    public Message get() {
+    public PublicMessage get() {
         if (state != State.DONE) {
             throw new IllegalStateException();
         }

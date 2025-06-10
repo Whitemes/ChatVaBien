@@ -1,33 +1,42 @@
 package fr.upem.net.chatvabien.protocol;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 
-public record Trame(byte opcode, String peusdo, Request request) {
-	
-	private static final Charset UTF8 = StandardCharsets.UTF_8;
-	
-	public ByteBuffer toByteBuffer() {
-        ByteBuffer loginEncoded = UTF8.encode(peusdo);
-        ByteBuffer requestBuffer = request.toByteBuffer();
-        
-        int totalSize = Byte.BYTES + Integer.BYTES + loginEncoded.remaining() + requestBuffer.remaining();
-        
-        ByteBuffer buffer = ByteBuffer.allocate(totalSize);
-        buffer.clear();
-        buffer.order(ByteOrder.BIG_ENDIAN);
-        
-        buffer.put(opcode);
-        
-        buffer.putInt(loginEncoded.remaining());
-        buffer.put(loginEncoded);
-	    buffer.put(requestBuffer);
-        
-        buffer.flip();
-        
-        return buffer;
+public record Trame(OPCODE opcode, String sender, Message message) {
+
+    /**
+     * Sérialise la trame complète : OPCODE + sender + message
+     */
+    public ByteBuffer toByteBuffer() {
+        var senderBytes = StandardCharsets.UTF_8.encode(sender);
+        var messageBuffer = message.serialize();
+
+        var buffer = ByteBuffer.allocate(
+                Byte.BYTES +                           // opcode
+                        Integer.BYTES + senderBytes.remaining() + // sender
+                        messageBuffer.remaining()              // message
+        );
+
+        return buffer
+                .put(opcode.getCode())
+                .putInt(senderBytes.remaining())
+                .put(senderBytes)
+                .put(messageBuffer)
+                .flip();
     }
 
+    /**
+     * Factory pour créer des trames de réponse du serveur
+     */
+    public static Trame serverResponse(OPCODE opcode, Message message) {
+        return new Trame(opcode, "Server", message);
+    }
+
+    /**
+     * Factory pour créer des trames client
+     */
+    public static Trame clientMessage(OPCODE opcode, String sender, Message message) {
+        return new Trame(opcode, sender, message);
+    }
 }

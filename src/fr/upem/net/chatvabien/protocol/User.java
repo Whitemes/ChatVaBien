@@ -1,8 +1,10 @@
 package fr.upem.net.chatvabien.protocol;
 
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Represents a user in the ChatVaBien protocol.
@@ -20,7 +22,7 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
      * This class should not be instantiated.
      */
     public static class ProtocolEncoder {
-        private static final Charset UTF8 = Charset.forName("UTF8");
+        private static final Charset UTF8 = StandardCharsets.UTF_8;
 
         /**
          * Encodes a broadcast or public message (e.g., a message sent from the server to all clients).
@@ -69,18 +71,18 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
          *
          * @param from      the pseudonym of the requester
          * @param to        the pseudonym of the target user
-         * @param clientIp  the {@link Ip} object representing the client's address and port
+         * @param address   the InetSocketAddress representing the client's address and port
          * @param token     the unique token associated with the private connection
          * @param opcode    the operation code for the OK response
          * @return a {@link ByteBuffer} containing the encoded OK response
          */
-        public static ByteBuffer encodeOKPrivateRequest(String from, String to, Ip clientIp, long token, byte opcode) {
+        public static ByteBuffer encodeOKPrivateRequest(String from, String to, InetSocketAddress address, long token, byte opcode) {
             var fromBytes = UTF8.encode(from);
             var toBytes = UTF8.encode(to);
 
-            var rawIp = clientIp.address().getAddress();
-            var ipType = clientIp.version();
-            var port = clientIp.port();
+            var rawIp = address.getAddress().getAddress();
+            byte ipType = (byte) (rawIp.length == 4 ? 0x04 : 0x06);
+            var port = address.getPort();
 
             var bb = ByteBuffer.allocate(Byte.BYTES +
                     Integer.BYTES + fromBytes.remaining() +

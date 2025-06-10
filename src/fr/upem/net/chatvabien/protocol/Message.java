@@ -1,35 +1,22 @@
 package fr.upem.net.chatvabien.protocol;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
 
-public record Message(String peusdo, String text) implements Request  {
+/**
+ * Messages scellés remplaçant l'interface Request
+ * Utilise le polymorphisme au lieu de instanceof
+ */
+public sealed interface Message
+        permits LoginMessage, PublicMessage, PrivateRequestMessage,
+        OKPrivateMessage, KOPrivateMessage, GetUsersMessage {
 
-	private static final Charset UTF8 = StandardCharsets.UTF_8;
+    /**
+     * Sérialise le message dans un ByteBuffer
+     */
+    ByteBuffer serialize();
 
-    public ByteBuffer toByteBuffer() {
-        ByteBuffer textEncoded = UTF8.encode(text);
-        
-        int totalSize = Integer.BYTES + textEncoded.remaining();
-        
-        ByteBuffer buffer = ByteBuffer.allocate(totalSize);
-        buffer.clear();
-        buffer.order(ByteOrder.BIG_ENDIAN);
-                
-	    buffer.putInt(textEncoded.remaining());
-	    buffer.put(textEncoded);
-        
-        buffer.flip();
-        
-        return buffer;
-    }
-
-	@Override
-	public void handle(ServerContext context) {
-		// TODO Auto-generated method stub
-		
-	}
-
+    /**
+     * Traite le message (remplace handle())
+     */
+    void process(ServerMessageProcessor processor);
 }
