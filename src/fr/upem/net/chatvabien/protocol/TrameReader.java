@@ -26,44 +26,71 @@ public class TrameReader implements Reader<Trame> {
             throw new IllegalStateException();
         }
 
-        switch (state) {
-            case WAITING_OPCODE -> {
-                var status = opcodeReader.process(bb);
-                if (status == ProcessStatus.DONE) {
-                    opcode = OPCODE.fromCode(opcodeReader.get());
-                    if (opcode == null) {
-                        state = State.ERROR;
-                        return ProcessStatus.ERROR;
+        System.out.println("=== TrameReader.process ===");
+        System.out.println("State: " + state);
+        System.out.println("Buffer position: " + bb.position() + ", remaining: " + bb.remaining());
+
+        // ✅ CORRECTION: BOUCLE pour traiter plusieurs états dans le même appel
+        while (bb.hasRemaining()) {
+            switch (state) {
+                case WAITING_OPCODE -> {
+                    System.out.println("Lecture OPCODE...");
+                    var status = opcodeReader.process(bb);
+                    System.out.println("Status OPCODE: " + status);
+                    if (status == ProcessStatus.DONE) {
+                        opcode = OPCODE.fromCode(opcodeReader.get());
+                        System.out.println("OPCODE lu: " + opcode);
+                        if (opcode == null) {
+                            System.out.println("OPCODE invalide!");
+                            state = State.ERROR;
+                            return ProcessStatus.ERROR;
+                        }
+                        opcodeReader.reset();
+                        state = State.WAITING_SENDER;
+                        System.out.println("✅ Passage à WAITING_SENDER");
+                        // ✅ CORRECTION: CONTINUE la boucle au lieu de return
+                    } else {
+                        return status;
                     }
-                    opcodeReader.reset();
-                    state = State.WAITING_SENDER;
-                } else {
-                    return status;
                 }
-            }
 
-            case WAITING_SENDER -> {
-                var status = senderReader.process(bb);
-                if (status == ProcessStatus.DONE) {
-                    sender = senderReader.get();
-                    senderReader.reset();
-                    state = State.WAITING_MESSAGE;
-                } else {
-                    return status;
+                case WAITING_SENDER -> {
+                    System.out.println("Lecture SENDER...");
+                    var status = senderReader.process(bb);
+                    System.out.println("Status SENDER: " + status);
+                    if (status == ProcessStatus.DONE) {
+                        sender = senderReader.get();
+                        System.out.println("SENDER lu: " + sender);
+                        senderReader.reset();
+                        state = State.WAITING_MESSAGE;
+                        System.out.println("✅ Passage à WAITING_MESSAGE");
+                        // ✅ CORRECTION: CONTINUE la boucle au lieu de return
+                    } else {
+                        return status;
+                    }
                 }
-            }
 
-            case WAITING_MESSAGE -> {
-                var messageStatus = parseMessage(bb);
-                if (messageStatus == ProcessStatus.DONE) {
-                    state = State.DONE;
-                    return ProcessStatus.DONE;
-                } else {
-                    return messageStatus;
+                case WAITING_MESSAGE -> {
+                    System.out.println("=== WAITING_MESSAGE ===");
+                    System.out.println("OPCODE pour parsing: " + opcode);
+                    System.out.println("Buffer avant parseMessage - position: " + bb.position() + ", remaining: " + bb.remaining());
+
+                    var messageStatus = parseMessage(bb);
+                    System.out.println("Retour parseMessage: " + messageStatus);
+
+                    if (messageStatus == ProcessStatus.DONE) {
+                        state = State.DONE;
+                        System.out.println("✅ MESSAGE parsé avec succès!");
+                        return ProcessStatus.DONE;
+                    } else {
+                        System.out.println("❌ parseMessage a échoué: " + messageStatus);
+                        return messageStatus;
+                    }
                 }
             }
         }
 
+        // Si on arrive ici, on a besoin de plus de données
         return ProcessStatus.REFILL;
     }
 
@@ -87,12 +114,23 @@ public class TrameReader implements Reader<Trame> {
     }
 
     private ProcessStatus parsePublicMessage(ByteBuffer bb) {
+        System.out.println("=== parsePublicMessage ===");
+        System.out.println("Buffer position: " + bb.position() + ", remaining: " + bb.remaining());
+
         var status = messageReader.process(bb);
+        System.out.println("Status messageReader: " + status);
+
         if (status == ProcessStatus.DONE) {
-            message = new PublicMessage(messageReader.get());
+            String messageText = messageReader.get();
+            System.out.println("Message lu: '" + messageText + "'");
+            message = new PublicMessage(messageText);
             messageReader.reset();
+            System.out.println("PublicMessage créé avec succès!");
+            return ProcessStatus.DONE;
+        } else {
+            System.out.println("MessageReader demande REFILL");
+            return status;
         }
-        return status;
     }
 
     private ProcessStatus parsePrivateRequest(ByteBuffer bb) {
