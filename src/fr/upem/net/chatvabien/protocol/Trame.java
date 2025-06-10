@@ -16,25 +16,12 @@ public record Trame(OPCODE opcode, String sender, Message message) {
                 Integer.BYTES + senderBytes.remaining() + // sender
                 messageBuffer.remaining();             // message
 
-        var buffer = ByteBuffer.allocate(totalSize);
-
-        var result = buffer
+        return ByteBuffer.allocate(totalSize)
                 .put(opcode.getCode())
                 .putInt(senderBytes.remaining())
                 .put(senderBytes)
                 .put(messageBuffer)
                 .flip();
-
-        // ✅ DEBUG: Dump du buffer final
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < result.remaining(); i++) {
-            byte b = result.get(result.position() + i);
-            sb.append(String.format("%02X ", b));
-        }
-        System.out.println("Buffer final: " + sb.toString());
-        System.out.println("===============================");
-
-        return result;
     }
 
     /**

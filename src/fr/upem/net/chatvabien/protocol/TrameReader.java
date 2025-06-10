@@ -4,6 +4,7 @@ import java.nio.ByteBuffer;
 
 /**
  * Reader unifié pour lire les trames complètes
+ * VERSION PROPRE - Debug retiré
  */
 public class TrameReader implements Reader<Trame> {
 
@@ -14,7 +15,7 @@ public class TrameReader implements Reader<Trame> {
     private State state = State.WAITING_OPCODE;
     private final ByteReader opcodeReader = new ByteReader();
     private final StringReader senderReader = new StringReader();
-    private final StringReader messageReader = new StringReader(); // Réutilisable pour tous les messages
+    private final StringReader messageReader = new StringReader();
 
     private OPCODE opcode;
     private String sender;
@@ -26,64 +27,41 @@ public class TrameReader implements Reader<Trame> {
             throw new IllegalStateException();
         }
 
-        System.out.println("=== TrameReader.process ===");
-        System.out.println("State: " + state);
-        System.out.println("Buffer position: " + bb.position() + ", remaining: " + bb.remaining());
-
-        // ✅ CORRECTION: BOUCLE pour traiter plusieurs états dans le même appel
+        // Boucle pour traiter plusieurs états dans le même appel
         while (bb.hasRemaining()) {
             switch (state) {
                 case WAITING_OPCODE -> {
-                    System.out.println("Lecture OPCODE...");
                     var status = opcodeReader.process(bb);
-                    System.out.println("Status OPCODE: " + status);
                     if (status == ProcessStatus.DONE) {
                         opcode = OPCODE.fromCode(opcodeReader.get());
-                        System.out.println("OPCODE lu: " + opcode);
                         if (opcode == null) {
-                            System.out.println("OPCODE invalide!");
                             state = State.ERROR;
                             return ProcessStatus.ERROR;
                         }
                         opcodeReader.reset();
                         state = State.WAITING_SENDER;
-                        System.out.println("✅ Passage à WAITING_SENDER");
-                        // ✅ CORRECTION: CONTINUE la boucle au lieu de return
                     } else {
                         return status;
                     }
                 }
 
                 case WAITING_SENDER -> {
-                    System.out.println("Lecture SENDER...");
                     var status = senderReader.process(bb);
-                    System.out.println("Status SENDER: " + status);
                     if (status == ProcessStatus.DONE) {
                         sender = senderReader.get();
-                        System.out.println("SENDER lu: " + sender);
                         senderReader.reset();
                         state = State.WAITING_MESSAGE;
-                        System.out.println("✅ Passage à WAITING_MESSAGE");
-                        // ✅ CORRECTION: CONTINUE la boucle au lieu de return
                     } else {
                         return status;
                     }
                 }
 
                 case WAITING_MESSAGE -> {
-                    System.out.println("=== WAITING_MESSAGE ===");
-                    System.out.println("OPCODE pour parsing: " + opcode);
-                    System.out.println("Buffer avant parseMessage - position: " + bb.position() + ", remaining: " + bb.remaining());
-
                     var messageStatus = parseMessage(bb);
-                    System.out.println("Retour parseMessage: " + messageStatus);
-
                     if (messageStatus == ProcessStatus.DONE) {
                         state = State.DONE;
-                        System.out.println("✅ MESSAGE parsé avec succès!");
                         return ProcessStatus.DONE;
                     } else {
-                        System.out.println("❌ parseMessage a échoué: " + messageStatus);
                         return messageStatus;
                     }
                 }
@@ -95,9 +73,16 @@ public class TrameReader implements Reader<Trame> {
     }
 
     private ProcessStatus parseMessage(ByteBuffer bb) {
-        // Parse selon l'opcode
         return switch (opcode) {
             case LOGIN -> {
+                message = new LoginMessage();
+                yield ProcessStatus.DONE;
+            }
+            case LOGIN_ACCEPTED -> {
+                message = new LoginMessage();
+                yield ProcessStatus.DONE;
+            }
+            case LOGIN_REFUSED -> {
                 message = new LoginMessage();
                 yield ProcessStatus.DONE;
             }
@@ -109,28 +94,20 @@ public class TrameReader implements Reader<Trame> {
                 message = new GetUsersMessage();
                 yield ProcessStatus.DONE;
             }
+            case CONNECTED_USERS_LIST -> parsePublicMessage(bb);
             default -> ProcessStatus.ERROR;
         };
     }
 
     private ProcessStatus parsePublicMessage(ByteBuffer bb) {
-        System.out.println("=== parsePublicMessage ===");
-        System.out.println("Buffer position: " + bb.position() + ", remaining: " + bb.remaining());
-
         var status = messageReader.process(bb);
-        System.out.println("Status messageReader: " + status);
-
         if (status == ProcessStatus.DONE) {
             String messageText = messageReader.get();
-            System.out.println("Message lu: '" + messageText + "'");
             message = new PublicMessage(messageText);
             messageReader.reset();
-            System.out.println("PublicMessage créé avec succès!");
             return ProcessStatus.DONE;
-        } else {
-            System.out.println("MessageReader demande REFILL");
-            return status;
         }
+        return status;
     }
 
     private ProcessStatus parsePrivateRequest(ByteBuffer bb) {
@@ -143,12 +120,11 @@ public class TrameReader implements Reader<Trame> {
     }
 
     private ProcessStatus parseOKPrivate(ByteBuffer bb) {
-        // Pour l'instant, juste le target pseudo - version simplifiée
+        // Version simplifiée - juste le target pseudo pour l'instant
         var status = messageReader.process(bb);
         if (status == ProcessStatus.DONE) {
             String targetPseudo = messageReader.get();
             messageReader.reset();
-            // Version simplifiée sans IP/token pour le test
             message = new OKPrivateMessage(targetPseudo, null, -1);
         }
         return status;
