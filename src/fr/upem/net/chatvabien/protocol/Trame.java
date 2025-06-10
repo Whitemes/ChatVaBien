@@ -12,18 +12,29 @@ public record Trame(OPCODE opcode, String sender, Message message) {
         var senderBytes = StandardCharsets.UTF_8.encode(sender);
         var messageBuffer = message.serialize();
 
-        var buffer = ByteBuffer.allocate(
-                Byte.BYTES +                           // opcode
-                        Integer.BYTES + senderBytes.remaining() + // sender
-                        messageBuffer.remaining()              // message
-        );
+        var totalSize = Byte.BYTES +                           // opcode
+                Integer.BYTES + senderBytes.remaining() + // sender
+                messageBuffer.remaining();             // message
 
-        return buffer
+        var buffer = ByteBuffer.allocate(totalSize);
+
+        var result = buffer
                 .put(opcode.getCode())
                 .putInt(senderBytes.remaining())
                 .put(senderBytes)
                 .put(messageBuffer)
                 .flip();
+
+        // ✅ DEBUG: Dump du buffer final
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < result.remaining(); i++) {
+            byte b = result.get(result.position() + i);
+            sb.append(String.format("%02X ", b));
+        }
+        System.out.println("Buffer final: " + sb.toString());
+        System.out.println("===============================");
+
+        return result;
     }
 
     /**
