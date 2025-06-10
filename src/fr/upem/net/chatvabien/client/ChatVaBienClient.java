@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.Channel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -42,7 +43,7 @@ import fr.upem.net.chatvabien.protocol.MessageReader;
 
 public class ChatVaBienClient {
 
-	static private class Context {
+	static private class Context implements ChannelContext {
         private final SelectionKey key;
         private final SocketChannel sc;
         private final ByteBuffer bufferIn = ByteBuffer.allocate(BUFFER_SIZE);
@@ -52,7 +53,9 @@ public class ChatVaBienClient {
         private final ArrayDeque<String> privateRequests = new ArrayDeque<>();
         private final BlockingQueue<String> pendingPrivateRequests = new ArrayBlockingQueue<>(100);
         private final Map<String, String> pendingRequestsDetails = new ConcurrentHashMap<>();
-        private final Map<String, UserPrivate> privateConnections = new ConcurrentHashMap<>();
+        private final Map<String, PrivateConnectionContext> privateConnections = new ConcurrentHashMap<>();
+        private final Selector selector;
+        private final Map<SelectionKey, ChannelContext> contexts;
         private boolean closed = false;
         private enum State {WAITING_OPCODE, WAITING_PEUSDO, WAITING_MESSAGE, WAITING_TARGET_PEUSDO, WAITING_TOKEN, WAITING_IP, DONE, ERROR};
         private State state = State.WAITING_OPCODE;
@@ -70,10 +73,12 @@ public class ChatVaBienClient {
         private final IpReader ipReader = new IpReader();
         private final LongReader longReader = new LongReader();
         
-        private Context(SelectionKey key, String login) {
+        private Context(SelectionKey key, String login, Selector selector, Map<SelectionKey, ChannelContext> contexts) {
             this.key = key;
             this.sc = (SocketChannel) key.channel();
             this.login = login;
+            this.selector = selector;
+            this.contexts = contexts;
         }
         
         private static String dumpBufferNum(ByteBuffer buffer) {
@@ -200,6 +205,7 @@ public class ChatVaBienClient {
                         var status = longReader.process(bufferIn);
                         if (status == ProcessStatus.DONE) {
                             token = longReader.get();
+                            System.out.println("token reçu : " + token);
                             longReader.reset();
                             state = State.DONE;
                         } else if (status == ProcessStatus.REFILL) {
@@ -210,14 +216,42 @@ public class ChatVaBienClient {
                         }
                     }
                     case WAITING_IP -> {
-                        var status = ipReader.process(bufferIn);
-                        if (status == ProcessStatus.DONE) {
-                            clientIp = ipReader.get();
-                            ipReader.reset();
-                            state = State.WAITING_TOKEN;
-                        } else if (status == ProcessStatus.REFILL) {
-                            return;
+                        if (bufferIn.remaining() < 1) {
+                            break; 
+                        }
+                        byte ipType = bufferIn.get();
+                        
+                        int addressSize;
+                        if (ipType == 0x04) {
+                            addressSize = 4;
+                        } else if (ipType == 0x06) {
+                            addressSize = 16;
                         } else {
+                            System.out.println("Type IP invalide: " + ipType);
+                            closed = true;
+                            return;
+                        }
+                        
+                        if (bufferIn.remaining() < addressSize) {
+                            bufferIn.position(bufferIn.position() - 1);
+                            break;
+                        }
+                        byte[] addressBytes = new byte[addressSize];
+                        bufferIn.get(addressBytes);
+                        
+                        if (bufferIn.remaining() < 4) {
+                            bufferIn.position(bufferIn.position() - addressSize - 1);
+                            break;
+                        }
+                        int port = bufferIn.getInt();
+                        
+                        try {
+                            InetAddress address = InetAddress.getByAddress(addressBytes);
+                            clientIp = new Ip(ipType, address, port);
+                            System.out.println("clientip reçu : " + clientIp);
+                            state = State.WAITING_TOKEN;
+                        } catch (Exception e) {
+                            System.out.println("Erreur création IP: " + e.getMessage());
                             closed = true;
                             return;
                         }
@@ -238,7 +272,7 @@ public class ChatVaBienClient {
                             processRequestIn();
                         } else if(opcode == OPCODE.OK_PRIVATE.getCode()){
                         	logger.info("OK PRIVATE");
-                        	//processOKPrivateIn();
+                        	processOKPrivateIn();
                         } else {
                             logger.warning("Opcode non géré: " + opcode);
                         }
@@ -312,7 +346,7 @@ public class ChatVaBienClient {
                 return;
             }
             
-            pendingRequestsDetails.put(peusdo, target_peusdo);
+            pendingRequestsDetails.put(peusdo, peusdo);
             
             try {
                 pendingPrivateRequests.put(peusdo);
@@ -345,14 +379,20 @@ public class ChatVaBienClient {
         }
         
         private void sendOKPrivate(String targetPseudo) throws IOException {
+        	System.out.println("DEBUG: Rayan envoie OK_PRIVATE: login=" + login + ", targetPseudo=" + targetPseudo);
             Random random = new Random();
             long token = random.nextLong();
             InetSocketAddress localAddress = (InetSocketAddress) sc.getLocalAddress();
             InetAddress inetAddress = localAddress.getAddress();
             int port = localAddress.getPort();
             
-            OKPrivateRequest req = new OKPrivateRequest(peusdo, targetPseudo, new Ip((byte) 0x4, inetAddress, port), token);
-            Trame trame = new Trame(OPCODE.OK_PRIVATE.getCode(), peusdo, req);
+            System.out.println("=== RAYAN ENVOIE ===");
+            System.out.println("IP: " + inetAddress.getHostAddress());
+            System.out.println("Port: " + port);
+            System.out.println("Token: " + token);
+            
+            OKPrivateRequest req = new OKPrivateRequest(login, targetPseudo, new Ip((byte) 0x4, inetAddress, port), token);
+            Trame trame = new Trame(OPCODE.OK_PRIVATE.getCode(), login, req);
             ByteBuffer bb = trame.toByteBuffer();
             if(bufferOut.remaining() >= bb.remaining()) {
                 bufferOut.put(bb);
@@ -361,14 +401,41 @@ public class ChatVaBienClient {
         }
 
         private void sendKOPrivate(String targetPseudo) {
-            KOPrivateResquest req = new KOPrivateResquest(peusdo, targetPseudo);
-            Trame trame = new Trame(OPCODE.KO_PRIVATE.getCode(), peusdo, req);
+            KOPrivateResquest req = new KOPrivateResquest(login, targetPseudo);
+            Trame trame = new Trame(OPCODE.KO_PRIVATE.getCode(), login, req);
             ByteBuffer bb = trame.toByteBuffer();
             if(bufferOut.remaining() >= bb.remaining()) {
                 bufferOut.put(bb);
                 updateInterestOps();
             }
         }
+        
+        private void processOKPrivateIn() {
+            System.out.println("🎉 OK_PRIVATE reçu !");
+            System.out.println("Pseudo: " + peusdo);
+            System.out.println("IP: " + clientIp.address().getHostAddress());
+            System.out.println("Port: " + clientIp.port());
+            System.out.println("Token: " + token);
+            
+            try {
+                InetSocketAddress targetAddress = new InetSocketAddress(clientIp.address(), clientIp.port());
+                SocketChannel privateChannel = SocketChannel.open();
+                privateChannel.configureBlocking(false);
+                
+                SelectionKey privateKey = privateChannel.register(selector, SelectionKey.OP_CONNECT);
+                PrivateConnectionContext privateContext = new PrivateConnectionContext(privateKey, peusdo, token);
+                contexts.put(privateKey, privateContext);
+                
+                privateConnections.put(peusdo, privateContext);
+                privateChannel.connect(targetAddress);
+                
+                System.out.println("🔄 Tentative de connexion privée vers " + peusdo + "...");
+                
+            } catch (IOException e) {
+                System.err.println("❌ Erreur lors de l'établissement de la connexion privée: " + e.getMessage());
+            }
+        }
+        
 
         /**
          * Update the interestOps of the key looking only at values of the boolean
@@ -412,7 +479,8 @@ public class ChatVaBienClient {
          *
          * @throws IOException
          */
-        private void doRead() throws IOException {
+        @Override
+		public void doRead() throws IOException {
         	int bytesRead = sc.read(bufferIn);
         	logger.info("Bytes lus: " + bytesRead);
         	
@@ -435,7 +503,8 @@ public class ChatVaBienClient {
          *
          * @throws IOException
          */
-        private void doWrite() throws IOException {
+        @Override
+		public void doWrite() throws IOException {
         	bufferOut.flip();
             int bytesWritten = sc.write(bufferOut);
             logger.info("Bytes écrits: " + bytesWritten);
@@ -447,7 +516,8 @@ public class ChatVaBienClient {
             }
             updateInterestOps();
         }
-
+        
+        @Override
         public void doConnect() throws IOException {
         	if (!sc.finishConnect()) {
                 return;
@@ -470,6 +540,184 @@ public class ChatVaBienClient {
             }
         }
     }
+	
+	static private class PrivateConnectionContext implements ChannelContext {
+	    private final SelectionKey key;
+	    private final SocketChannel sc;
+	    private final String remotePseudo;
+	    private final long connectId;
+	    private final ByteBuffer bufferIn = ByteBuffer.allocate(BUFFER_SIZE);
+	    private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
+	    private final ArrayDeque<String> messageQueue = new ArrayDeque<>();
+	    private boolean openSent = false;
+	    private boolean connected = false;
+	    
+	    private PrivateConnectionContext(SelectionKey key, String remotePseudo, long connectId) {
+	        this.key = key;
+	        this.sc = (SocketChannel) key.channel();
+	        this.remotePseudo = remotePseudo;
+	        this.connectId = connectId;
+	    }
+	    
+	    private void sendOpen() {
+	        if (openSent) return;
+	        
+	        ByteBuffer bb = ByteBuffer.allocate(9);
+	        bb.put((byte) OPCODE.OPEN.getCode());
+	        bb.putLong(connectId);
+	        bb.flip();
+	        
+	        if (bufferOut.remaining() >= bb.remaining()) {
+	            bufferOut.put(bb);
+	            openSent = true;
+	            connected = true;
+	            logger.info("Message OPEN envoyé avec connect_id: " + connectId);
+	        }
+	    }
+	    
+	    private void queuePrivateMessage(String message) {
+	        messageQueue.offer(message);
+	        processOut();
+	        updatePrivateInterestOps();
+	    }
+	    
+	    private void processOut() {
+	        while (bufferOut.hasRemaining() && !messageQueue.isEmpty()) {
+	            String msg = messageQueue.peek();
+	            
+	            ByteBuffer bb = createPrivateMessage(msg);
+	            
+	            if (bufferOut.remaining() >= bb.remaining()) {
+	                bufferOut.put(bb);
+	                messageQueue.poll();
+	            } else {
+	                break;
+	            }
+	        }
+	    }
+	    
+	    private ByteBuffer createPrivateMessage(String message) {
+	        byte[] msgBytes = message.getBytes(StandardCharsets.UTF_8);
+	        ByteBuffer bb = ByteBuffer.allocate(1 + 4 + 0 + 4 + msgBytes.length); // opcode + taille_login + login + taille_msg + msg
+	        
+	        bb.put((byte) OPCODE.MESSAGE.getCode());
+	        bb.putInt(0);
+	        bb.putInt(msgBytes.length);
+	        bb.put(msgBytes);
+	        bb.flip();
+	        
+	        return bb;
+	    }
+	    
+	    private void processIn() {
+	        bufferIn.flip();
+	        
+	        while (bufferIn.hasRemaining()) {
+	            if (bufferIn.remaining() < 1) {
+	                break;
+	            }
+	            
+	            byte opcode = bufferIn.get();
+	            
+	            if (opcode == OPCODE.MESSAGE.getCode()) {
+	                if (bufferIn.remaining() < 4) {
+	                    bufferIn.position(bufferIn.position() - 1);
+	                    break;
+	                }
+	                int loginSize = bufferIn.getInt();
+	                
+	                if (bufferIn.remaining() < loginSize) {
+	                    bufferIn.position(bufferIn.position() - 5);
+	                    break;
+	                }
+	                bufferIn.position(bufferIn.position() + loginSize);
+	                
+	                if (bufferIn.remaining() < 4) {
+	                    bufferIn.position(bufferIn.position() - 5 - loginSize);
+	                    break;
+	                }
+	                int msgSize = bufferIn.getInt();
+	                
+	                if (bufferIn.remaining() < msgSize) {
+	                    bufferIn.position(bufferIn.position() - 9 - loginSize);
+	                    break;
+	                }
+	                
+	                byte[] msgBytes = new byte[msgSize];
+	                bufferIn.get(msgBytes);
+	                String message = new String(msgBytes, StandardCharsets.UTF_8);
+	                
+	                System.out.println("💬 [PRIVÉ] " + remotePseudo + ": " + message);
+	            }
+	        }
+	        
+	        if (bufferIn.hasRemaining()) {
+	            bufferIn.compact();
+	        } else {
+	            bufferIn.clear();
+	        }
+	    }
+	    
+	    private void updatePrivateInterestOps() {
+	        int ops = SelectionKey.OP_READ;
+	        
+	        if (!openSent || bufferOut.position() > 0) {
+	            ops |= SelectionKey.OP_WRITE;
+	        }
+	        
+	        if (key.isValid()) {
+	            key.interestOps(ops);
+	        }
+	    }
+	    
+	    @Override
+		public void doRead() throws IOException {
+	        int bytesRead = sc.read(bufferIn);
+	        if (bytesRead == -1) {
+	            logger.info("Connexion privée fermée par " + remotePseudo);
+	            silentlyClosePrivate();
+	            return;
+	        }
+	        if (bytesRead > 0) {
+	            processIn();
+	        }
+	        updatePrivateInterestOps();
+	    }
+	    
+	    @Override
+		public void doWrite() throws IOException {
+	        if (!openSent) {
+	            sendOpen();
+	        }
+	        
+	        bufferOut.flip();
+	        int bytesWritten = sc.write(bufferOut);
+	        bufferOut.compact();
+	        
+	        if (bytesWritten > 0) {
+	            processOut();
+	        }
+	        updatePrivateInterestOps();
+	    }
+	    
+	    @Override
+		public void doConnect() throws IOException {
+	        if (!sc.finishConnect()) {
+	            return;
+	        }
+	        logger.info("✅ Connexion privée établie avec " + remotePseudo);
+	        updatePrivateInterestOps();
+	    }
+	    
+	    private void silentlyClosePrivate() {
+	        try {
+	            sc.close();
+	        } catch (IOException e) {
+	            // ignore
+	        }
+	    }
+	}
+	
 
     private static int BUFFER_SIZE = 10_000;
     private static Logger logger = Logger.getLogger(ChatVaBienClient.class.getName());
@@ -481,7 +729,11 @@ public class ChatVaBienClient {
     private final Thread console;
     private Context uniqueContext;
     
+    private final Map<SelectionKey, ChannelContext> contexts = new ConcurrentHashMap<>();
+    
     private final BlockingQueue<String> commandQueue = new ArrayBlockingQueue<>(100);
+    
+    private final Map<Long, PrivateConnectionContext> pendingConnections = new ConcurrentHashMap<>();
 
     public ChatVaBienClient(String login, InetSocketAddress serverAddress) throws IOException {
         this.serverAddress = serverAddress;
@@ -537,8 +789,28 @@ public class ChatVaBienClient {
         }
         
         if ("accept".equals(action)) {
-            sendCommand("INTERNAL_ACCEPT_PRIVATE:" + pseudo);
             System.out.println("✅ Connexion privée acceptée avec " + pseudo);
+            try {
+                ServerSocketChannel ssc = ServerSocketChannel.open();
+                ssc.configureBlocking(false);
+                ssc.bind(new InetSocketAddress(0));
+
+                int port = ((InetSocketAddress) ssc.getLocalAddress()).getPort();
+
+                SelectionKey sscKey = ssc.register(selector, SelectionKey.OP_ACCEPT);
+
+                //contexts.put(sscKey, pseudo);
+
+                sendCommand("INTERNAL_ACCEPT_PRIVATE:" + pseudo);
+
+                System.out.println("✅ Prêt à accepter la connexion privée pour " + pseudo + " sur port " + port);
+                
+                ///C CETTE IP QUE LE TARGET ENVOI OK PRIVATE
+
+            } catch (IOException e) {
+                System.err.println("❌ Erreur lors de la création du ServerSocketChannel pour la connexion privée : " + e.getMessage());
+            }
+
         } else if ("refuse".equals(action)) {
             sendCommand("INTERNAL_REFUSE_PRIVATE:" + pseudo);
             System.out.println("❌ Connexion privée refusée avec " + pseudo);
@@ -560,18 +832,29 @@ public class ChatVaBienClient {
             } else if (command.startsWith("INTERNAL_REFUSE_PRIVATE:")) {
                 String senderPseudo = command.substring("INTERNAL_REFUSE_PRIVATE:".length());
                 uniqueContext.sendKOPrivate(senderPseudo);
-            } else if(command.startsWith("@")) {
+            } else if (command.startsWith("@")) {
                 String[] parts = command.substring(1).split(" ", 2);
-                String pseudo = parts[0];
-                
-                if (!pseudo.isEmpty()) {
-                    logger.info("Demande de message privé pour: " + pseudo);
-                    uniqueContext.queuePrivateRequest(pseudo);
-                } else {
-                    logger.info("Pseudo manquant après @");
+                if (parts.length == 2) {
+                    String pseudo = parts[0];
+                    String message = parts[1];
+                    
+                    PrivateConnectionContext privateContext = uniqueContext.privateConnections.get(pseudo);
+                    if (privateContext != null && privateContext.connected) {
+                        privateContext.queuePrivateMessage(message);
+                        System.out.println("(Privé) -> " + pseudo + " : " + message);
+                    } else {
+                        logger.info("Demande de connexion privée pour: " + pseudo);
+                        uniqueContext.queuePrivateRequest(pseudo);
+                    }
+                } else if (parts.length == 1) {
+                    String pseudo = parts[0];
+                    if (!pseudo.isEmpty()) {
+                        logger.info("Demande de connexion privée pour: " + pseudo);
+                        uniqueContext.queuePrivateRequest(pseudo);
+                    }
                 }
-            } else if(command.startsWith("/")) {
-                if(command.equals("/getusers")) {
+            } else if (command.startsWith("/")) {
+                if (command.equals("/getusers")) {
                     logger.info("GetUsers pas encore implémenté");
                 } else {
                     logger.info("Transfert de fichiers pas encore implémenté");
@@ -586,8 +869,8 @@ public class ChatVaBienClient {
     public void launch() throws IOException {
         sc.configureBlocking(false);
         var key = sc.register(selector, SelectionKey.OP_CONNECT);
-        uniqueContext = new Context(key, login);
-        key.attach(uniqueContext);
+        uniqueContext = new Context(key, login, selector, contexts);
+        contexts.put(key, uniqueContext);
         sc.connect(serverAddress);
 
         console.start();
@@ -604,23 +887,28 @@ public class ChatVaBienClient {
 
     private void treatKey(SelectionKey key) {
         try {
+            ChannelContext context = contexts.get(key);
+            if (context == null) {
+                return;
+            }
+            
             if (key.isValid() && key.isConnectable()) {
-                uniqueContext.doConnect();
+                context.doConnect();
             }
             if (key.isValid() && key.isWritable()) {
-                uniqueContext.doWrite();
+                context.doWrite();
             }
             if (key.isValid() && key.isReadable()) {
-            	logger.info("🔍 Données disponibles en lecture");
-                uniqueContext.doRead();
+                context.doRead();
             }
         } catch (IOException ioe) {
-            // lambda call in select requires to tunnel IOException
             throw new UncheckedIOException(ioe);
         }
     }
 
+
     private void silentlyClose(SelectionKey key) {
+        contexts.remove(key);
         Channel sc = (Channel) key.channel();
         try {
             sc.close();

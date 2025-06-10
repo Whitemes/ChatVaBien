@@ -28,8 +28,21 @@ public record OKPrivateRequest(String peusdoRequester, String peusdoTarget, Ip s
 
 	@Override
 	public ByteBuffer toByteBuffer() {
-		var by = UTF8.encode(peusdoTarget);
-		var ip = UTF8.encode(sc.address().toString());
-		return ByteBuffer.allocate(Integer.BYTES + by.remaining() + Byte.BYTES + ip.remaining() + Integer.BYTES + Long.BYTES).putInt(by.remaining()).put(by).put(sc.version()).put(ip).putInt(sc.port()).putLong(token).flip();
+	    var peusdoTargetBytes = UTF8.encode(peusdoTarget);
+	    var ipBytes = sc.address().getAddress();
+	    
+	    return ByteBuffer.allocate(
+	        Integer.BYTES + peusdoTargetBytes.remaining() +
+	        Byte.BYTES + ipBytes.length +
+	        Integer.BYTES +
+	        Long.BYTES
+	    )
+	    .putInt(peusdoTargetBytes.remaining())
+	    .put(peusdoTargetBytes)                       // targetPeusdo
+	    .put(sc.version())                            // IP version
+	    .put(ipBytes)                                 // IP bytes bruts
+	    .putInt(sc.port())                            // port
+	    .putLong(token)                               // token
+	    .flip();
 	}
 }
