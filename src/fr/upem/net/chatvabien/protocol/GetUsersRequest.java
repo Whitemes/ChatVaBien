@@ -1,5 +1,7 @@
 package fr.upem.net.chatvabien.protocol;
 
+import java.nio.ByteBuffer;
+
 /**
  * A request to retrieve the list of currently connected users.
  */
@@ -13,5 +15,11 @@ public record GetUsersRequest() implements Request {
 	@Override
 	public void handle(ServerContext context) {
 		context.handleGetUsers();
+	}
+
+	@Override
+	public ByteBuffer toByteBuffer() {
+		// TODO Auto-generated method stub
+		return null;
 	}
 }

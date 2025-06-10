@@ -1,5 +1,9 @@
 package fr.upem.net.chatvabien.protocol;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+
 /**
  * Represents a request to initiate a private connection between two users.
  *
@@ -8,6 +12,8 @@ package fr.upem.net.chatvabien.protocol;
  */
 public record PrivateRequest(String peusdoRequester, String peusdoTarget) implements Request {
 
+	private static final Charset UTF8 = StandardCharsets.UTF_8;
+	
 	/**
 	 * Handles the private connection request using the provided server context.
 	 *
@@ -16,5 +22,11 @@ public record PrivateRequest(String peusdoRequester, String peusdoTarget) implem
 	@Override
 	public void handle(ServerContext context) {
 		context.handlePrivateRequest();
+	}
+
+	@Override
+	public ByteBuffer toByteBuffer() {
+		var by = UTF8.encode(peusdoTarget);
+		return ByteBuffer.allocate(Integer.BYTES + by.remaining()).putInt(by.remaining()).put(by).flip();
 	}
 }
