@@ -8,7 +8,7 @@ import java.util.Map;
 import fr.upem.net.chatvabien.protocol.PublicMessage;
 
 /**
- * Implémentation par défaut du processeur de commandes - VERSION CORRIGÉE
+ * Implémentation par défaut du processeur de commandes
  */
 public class DefaultCommandProcessor implements CommandProcessor {
 
@@ -41,7 +41,7 @@ public class DefaultCommandProcessor implements CommandProcessor {
                 handlePublicMessage(command);
             }
         } catch (Exception e) {
-            System.err.println("❌ Erreur commande: " + e.getMessage());
+            System.err.println("Erreur commande: " + e.getMessage());
         }
     }
 
@@ -49,13 +49,12 @@ public class DefaultCommandProcessor implements CommandProcessor {
         switch (command) {
             case "/help" -> showHelp();
             case "/users" -> {
-                // ✅ CORRIGÉ: Utiliser la méthode du client pour afficher
                 client.handleUsersCommand();
             }
             case "/quit" -> System.exit(0);
             default -> {
                 if (command.startsWith("/")) {
-                    System.out.println("❓ Commande inconnue. Tapez /help");
+                    System.out.println("Commande inconnue. Tapez /help");
                 }
             }
         }
@@ -69,24 +68,23 @@ public class DefaultCommandProcessor implements CommandProcessor {
     private void handlePrivateMessage(String command) {
         var parts = command.substring(1).split(" ", 2);
         if (parts.length < 1) {
-            System.out.println("❓ Usage: @pseudo [message]");
+            System.out.println("Usage: @pseudo [message]");
             return;
         }
 
         var targetPseudo = parts[0];
 
-        // ✅ CORRIGÉ: Envoyer demande privée même sans message
         var privateContext = privateContexts.get(targetPseudo);
         if (privateContext != null && privateContext.isOpened()) {
             if (parts.length == 2) {
                 privateContext.sendPrivateMessage(parts[1]);
-                System.out.println("💬 [PRIVÉ] -> " + targetPseudo + ": " + parts[1]);
+                System.out.println("[PRIVÉ] -> " + targetPseudo + ": " + parts[1]);
             } else {
-                System.out.println("💬 Connexion privée active avec " + targetPseudo);
+                System.out.println("Connexion privée active avec " + targetPseudo);
             }
         } else {
             serverContext.queuePrivateRequest(targetPseudo);
-            System.out.println("📤 Demande de connexion privée envoyée à " + targetPseudo);
+            System.out.println("Demande de connexion privée envoyée à " + targetPseudo);
         }
     }
 
@@ -96,22 +94,22 @@ public class DefaultCommandProcessor implements CommandProcessor {
             var token = System.currentTimeMillis();
 
             serverContext.queueOKPrivate(requester, localAddress, token);
-            System.out.println("✅ Connexion privée acceptée avec " + requester);
+            System.out.println("Connexion privée acceptée avec " + requester);
 
         } catch (IOException e) {
-            System.err.println("❌ Erreur acceptation privée: " + e.getMessage());
+            System.err.println("Erreur acceptation privée: " + e.getMessage());
         }
     }
 
     private void handleRefusePrivate(String requester) {
         serverContext.queueKOPrivate(requester);
-        System.out.println("❌ Connexion privée refusée avec " + requester);
+        System.out.println("Connexion privée refusée avec " + requester);
     }
 
     @Override
     public void showHelp() {
         System.out.println("""
-            🆘 Aide ChatVaBien:
+            Aide ChatVaBien:
             
             Messages publics:
               <message>           - Envoyer un message public

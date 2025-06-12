@@ -6,7 +6,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.logging.Logger;
 
 /**
- * Gestionnaire de la console utilisateur - VERSION PROPRE
+ * Gestionnaire de la console utilisateur
  */
 public class ConsoleManager {
     private static final Logger logger = Logger.getLogger(ConsoleManager.class.getName());
@@ -20,7 +20,6 @@ public class ConsoleManager {
 
     public void start() {
         consoleThread.start();
-        // ✅ SUPPRIMÉ: Log de démarrage
     }
 
     public String pollCommand() {
@@ -29,7 +28,7 @@ public class ConsoleManager {
 
     private void consoleRun() {
         try (var scanner = new Scanner(System.in)) {
-            System.out.println("🚀 Client démarré. Tapez vos messages ou /help pour l'aide");
+            System.out.println("Client démarré. Tapez vos messages ou /help pour l'aide");
             System.out.print("> ");
             System.out.flush();
 
@@ -40,7 +39,7 @@ public class ConsoleManager {
                     boolean offered = commandQueue.offer(line);
 
                     if (!offered) {
-                        System.err.println("⚠️ Queue pleine, commande ignorée");
+                        System.err.println("Queue pleine, commande ignorée");
                     }
                 }
 
@@ -50,6 +49,5 @@ public class ConsoleManager {
         } catch (Exception e) {
             logger.severe("Erreur thread console: " + e.getMessage());
         }
-        // ✅ SUPPRIMÉ: Log de fin
     }
 }
