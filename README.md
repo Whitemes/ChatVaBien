@@ -108,13 +108,13 @@ refuse bob                    # Refuser demande privée
 ### Test de base
 ```bash
 # Terminal 1: Serveur
-java fr.upem.net.chatvabien.server.ChatVaBienServer 7777
+java -jar ChatVaBienServer.jar 7777
 
 # Terminal 2: Alice  
-java fr.upem.net.chatvabien.client.ChatVaBienClient alice localhost 7777 ./files
+java -jar ChatVaBienClient.jar alice localhost 7777 ./files
 
 # Terminal 3: Bob
-java fr.upem.net.chatvabien.client.ChatVaBienClient bob localhost 7777 ./files
+java -jar ChatVaBienClient.jar bob localhost 7777 ./files
 ```
 
 ### Test avec authentification
@@ -123,8 +123,6 @@ java fr.upem.net.chatvabien.client.ChatVaBienClient bob localhost 7777 ./files
 java -jar ServerMDP.jar 8888 passwords.txt
 
 # Terminal 2: Serveur
-java fr.upem.net.chatvabien.server.ChatVaBienServer 7777 8888
+java -jar ChatVaBienServer.jar 7777 8888
 
-# Terminal 3: Client
-java fr.upem.net.chatvabien.client.ChatVaBienClient arnaud localhost 7777 ./files
 ```
