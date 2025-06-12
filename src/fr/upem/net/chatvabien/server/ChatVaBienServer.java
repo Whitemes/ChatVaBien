@@ -12,6 +12,7 @@ import fr.upem.net.chatvabien.protocol.*;
 
 /**
  * Serveur ChatVaBien refactorisé selon les bonnes pratiques NIO
+ * VERSION PROPRE - Debug retiré
  */
 public class ChatVaBienServer {
     private static final Logger logger = Logger.getLogger(ChatVaBienServer.class.getName());
@@ -127,7 +128,7 @@ public class ChatVaBienServer {
     }
 
     /**
-     * Contexte client simplifié - plus d'interface inutile
+     * Contexte client simplifié
      */
     private class Context implements ServerMessageProcessor {
         private final SelectionKey key;
@@ -139,7 +140,7 @@ public class ChatVaBienServer {
         private final TrameReader trameReader = new TrameReader();
 
         private String pseudo;
-        private boolean authenticated = false;
+        boolean authenticated = false; // ✅ RENDU PACKAGE-PRIVATE
         private boolean closed = false;
 
         Context(SelectionKey key) {
@@ -147,39 +148,8 @@ public class ChatVaBienServer {
             this.sc = (SocketChannel) key.channel();
         }
 
-        // ✅ CORRIGÉ: Une seule méthode dumpBuffer
-        private static String dumpBuffer(ByteBuffer buffer) {
-            StringBuilder sb = new StringBuilder();
-
-            // ✅ IMPORTANT: Sauvegarder position/limit
-            int originalPos = buffer.position();
-            int originalLimit = buffer.limit();
-
-            // ✅ Afficher depuis le début jusqu'à la position (données écrites)
-            for (int i = 0; i < originalPos; i++) {
-                byte b = buffer.get(i);
-                sb.append(String.format("%02X ", b));
-            }
-
-            // ✅ Si en read-mode, afficher aussi les données restantes
-            if (originalPos < originalLimit) {
-                sb.append("| ");
-                for (int i = originalPos; i < originalLimit; i++) {
-                    byte b = buffer.get(i);
-                    sb.append(String.format("%02X ", b));
-                }
-            }
-
-            return sb.toString().trim();
-        }
-
         void doRead() throws IOException {
-            // ✅ AJOUT: Debug de l'état initial du buffer
-            logger.info("=== DÉBUT doRead ===");
-            logger.info("bufferIn AVANT lecture - position: " + bufferIn.position() + ", limit: " + bufferIn.limit() + ", remaining: " + bufferIn.remaining());
-
             var read = sc.read(bufferIn);
-            logger.info("Bytes lus du réseau: " + read);
 
             if (read == -1) {
                 closed = true;
@@ -187,95 +157,58 @@ public class ChatVaBienServer {
             }
 
             if (read > 0) {
-                // ✅ AJOUT: Debug APRÈS lecture, AVANT processIn
-                logger.info("bufferIn APRÈS lecture - position: " + bufferIn.position() + ", limit: " + bufferIn.limit() + ", remaining: " + bufferIn.remaining());
-                logger.info("Contenu bufferIn RAW APRÈS lecture: " + dumpBuffer(bufferIn));
-
                 processIn();
-
-                // ✅ AJOUT: Debug APRÈS processIn
-                logger.info("bufferIn APRÈS processIn - position: " + bufferIn.position() + ", limit: " + bufferIn.limit() + ", remaining: " + bufferIn.remaining());
             }
 
             updateInterestOps();
-            logger.info("=== FIN doRead ===");
         }
 
-        // ✅ CORRIGÉ: UNE SEULE méthode processIn avec debug
         private void processIn() {
-            logger.info("=== DÉBUT processIn ===");
-            logger.info("bufferIn AVANT flip - position: " + bufferIn.position() + ", limit: " + bufferIn.limit());
-
             bufferIn.flip();
 
-            logger.info("bufferIn APRÈS flip - position: " + bufferIn.position() + ", limit: " + bufferIn.limit() + ", remaining: " + bufferIn.remaining());
-            logger.info("Contenu bufferIn APRÈS flip: " + dumpBuffer(bufferIn));
-
             while (true) {
-                logger.info("--- Début boucle parsing ---");
-                logger.info("bufferIn dans boucle - position: " + bufferIn.position() + ", remaining: " + bufferIn.remaining());
-
                 var status = trameReader.process(bufferIn);
-
-                logger.info("Status du TrameReader: " + status);
-                logger.info("bufferIn après TrameReader - position: " + bufferIn.position() + ", remaining: " + bufferIn.remaining());
 
                 if (status == Reader.ProcessStatus.DONE) {
                     var trame = trameReader.get();
-                    logger.info("Trame parsée avec succès: " + trame.opcode() + " de " + trame.sender());
                     handleTrame(trame);
                     trameReader.reset();
                 } else if (status == Reader.ProcessStatus.REFILL) {
-                    logger.info("REFILL demandé - pas assez de données");
                     break;
                 } else {
-                    logger.severe("ERREUR parsing - abandon");
+                    logger.severe("Erreur parsing - abandon");
                     closed = true;
                     break;
                 }
             }
 
-            logger.info("bufferIn AVANT compact - position: " + bufferIn.position() + ", limit: " + bufferIn.limit() + ", remaining: " + bufferIn.remaining());
             bufferIn.compact();
-            logger.info("bufferIn APRÈS compact - position: " + bufferIn.position() + ", limit: " + bufferIn.limit());
-            logger.info("=== FIN processIn ===");
         }
 
-        // ✅ AJOUT: doWrite corrigé pour éviter les problèmes
         void doWrite() throws IOException {
-            logger.info("=== DÉBUT doWrite pour " + pseudo + " ===");
-            logger.info("Queue size: " + outQueue.size());
-
             processOut();
 
             if (bufferOut.position() > 0) {
-                logger.info("BufferOut à écrire - position: " + bufferOut.position());
                 bufferOut.flip();
                 var written = sc.write(bufferOut);
-                logger.info("Bytes écrits: " + written);
 
                 if (bufferOut.hasRemaining()) {
-                    logger.info("Données restantes: " + bufferOut.remaining());
                     bufferOut.compact();
                 } else {
-                    logger.info("Buffer entièrement écrit");
                     bufferOut.clear();
                 }
-            } else {
-                logger.info("Rien à écrire");
             }
 
             updateInterestOps();
-            logger.info("=== FIN doWrite ===");
         }
 
         private void handleTrame(Trame trame) {
-            // Validation pseudo
+            // ✅ CORRIGÉ: Validation pseudo plus souple
             if (pseudo == null) {
                 pseudo = trame.sender();
-            } else if (!pseudo.equals(trame.sender())) {
-                logger.warning("Pseudo incohérent: " + trame.sender());
-                closed = true;
+            } else if (!pseudo.equals(trame.sender()) && !trame.sender().equals("Server")) {
+                logger.warning("Pseudo incohérent: reçu '" + trame.sender() + "', attendu '" + pseudo + "'");
+                // ✅ Ne pas fermer la connexion, juste ignorer le message
                 return;
             }
 
@@ -298,10 +231,8 @@ public class ChatVaBienServer {
         }
 
         private void queueResponse(OPCODE opcode, Message message) {
-            logger.info("Ajout réponse en queue: " + opcode + " pour " + pseudo);
             outQueue.offer(Trame.serverResponse(opcode, message));
             updateInterestOps();
-            logger.info("Queue size maintenant: " + outQueue.size());
         }
 
         private void updateInterestOps() {
@@ -342,48 +273,46 @@ public class ChatVaBienServer {
                 var user = new User(System.currentTimeMillis(), pseudo, sc, false);
                 connectedUsers.put(pseudo, user);
                 authenticated = true;
+
+                // ✅ CORRECTION: D'abord envoyer LOGIN_ACCEPTED
                 queueResponse(OPCODE.LOGIN_ACCEPTED, new LoginMessage());
-                broadcastUserConnection(pseudo);
+
+                // ✅ PUIS broadcaster la connexion
                 logger.info(pseudo + " s'est connecté");
+                broadcastUserConnection(pseudo);
             }
         }
 
-        // 2. ✅ CORRECTION: processPublicMessage avec debug
         @Override
         public void processPublicMessage(String text) {
-            logger.info("Message public reçu de " + pseudo + ": '" + text + "'");
-
             if (!authenticated) {
                 logger.warning("Message non authentifié de " + pseudo);
                 return;
             }
 
-            logger.info("Diffusion du message à " + connectedUsers.size() + " utilisateurs");
+            logger.info("Message public: " + pseudo + " -> " + text);
             broadcast(pseudo, text);
         }
 
         @Override
         public void processPrivateRequest(String targetPseudo) {
-            logger.info("Demande privée reçue de " + pseudo + " vers " + targetPseudo);
+            logger.info("Demande privée: " + pseudo + " -> " + targetPseudo);
 
             var targetUser = connectedUsers.get(targetPseudo);
             if (targetUser == null) {
                 logger.warning("Utilisateur cible introuvable: " + targetPseudo);
-                logger.info("Utilisateurs connectés: " + connectedUsers.keySet());
                 return;
             }
 
-            logger.info("Utilisateur " + targetPseudo + " trouvé, transmission...");
-
-            // Transmettre la demande au destinataire
+            // ✅ CORRIGÉ: Transmettre avec le pseudo correct
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                var request = new PrivateRequestMessage(pseudo); // pseudo = demandeur
-                targetContext.queueResponse(OPCODE.REQUEST_PRIVATE, request);
-                logger.info("✅ Demande privée transmise de " + pseudo + " vers " + targetPseudo);
-            } else {
-                logger.warning("❌ Clé SelectionKey introuvable pour " + targetPseudo);
+                // ✅ IMPORTANT: Créer la trame avec le bon sender
+                var requestTrame = Trame.clientMessage(OPCODE.REQUEST_PRIVATE, pseudo, new PrivateRequestMessage(targetPseudo));
+                targetContext.outQueue.offer(requestTrame);
+                targetContext.updateInterestOps();
+                logger.info("Demande privée transmise: " + pseudo + " -> " + targetPseudo);
             }
         }
 
@@ -395,8 +324,10 @@ public class ChatVaBienServer {
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                var response = new OKPrivateMessage(pseudo, address, token);
-                targetContext.queueResponse(OPCODE.OK_PRIVATE, response);
+                // ✅ CORRIGÉ: Créer une réponse simple sans address/token pour l'instant
+                var responseTrame = Trame.clientMessage(OPCODE.OK_PRIVATE, pseudo, new PublicMessage(targetPseudo));
+                targetContext.outQueue.offer(responseTrame);
+                targetContext.updateInterestOps();
             }
         }
 
@@ -408,53 +339,43 @@ public class ChatVaBienServer {
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                var response = new KOPrivateMessage(pseudo);
-                targetContext.queueResponse(OPCODE.KO_PRIVATE, response);
+                // ✅ CORRIGÉ: Créer une réponse simple
+                var responseTrame = Trame.clientMessage(OPCODE.KO_PRIVATE, pseudo, new PublicMessage(targetPseudo));
+                targetContext.outQueue.offer(responseTrame);
+                targetContext.updateInterestOps();
             }
         }
 
         @Override
         public void processGetUsers() {
-            logger.info("Demande liste utilisateurs de " + pseudo);
-
             var userList = String.join(", ", connectedUsers.keySet());
-            logger.info("Liste construite: " + userList);
-
             var response = new PublicMessage(userList);
             queueResponse(OPCODE.CONNECTED_USERS_LIST, response);
-
-            logger.info("✅ Réponse /users envoyée à " + pseudo);
+            logger.info("Liste utilisateurs envoyée à " + pseudo + ": " + userList);
         }
     }
 
     // ========== MÉTHODES DE BROADCAST ==========
 
     private void broadcast(String sender, String message) {
-        logger.info("=== DÉBUT BROADCAST ===");
-        logger.info("Sender: " + sender + ", Message: '" + message + "'");
-        logger.info("Utilisateurs connectés: " + connectedUsers.keySet());
-
         var broadcastMessage = new PublicMessage(message);
         var trame = Trame.clientMessage(OPCODE.MESSAGE, sender, broadcastMessage);
 
         int envoyesCount = 0;
         for (var user : connectedUsers.values()) {
-            if (!user.pseudo().equals(sender)) {
-                var key = user.sc().keyFor(selector);
-                if (key != null) {
-                    var context = (Context) key.attachment();
+            // ✅ CORRECTION: Diffuser à TOUS les utilisateurs authentifiés
+            var key = user.sc().keyFor(selector);
+            if (key != null) {
+                var context = (Context) key.attachment();
+                if (context != null && context.authenticated) {
                     context.outQueue.offer(trame);
                     context.updateInterestOps();
                     envoyesCount++;
-                    logger.info("✅ Message diffusé vers " + user.pseudo());
-                } else {
-                    logger.warning("❌ Clé introuvable pour " + user.pseudo());
                 }
             }
         }
 
-        logger.info("Messages diffusés: " + envoyesCount + "/" + (connectedUsers.size() - 1));
-        logger.info("=== FIN BROADCAST ===");
+        logger.info("Message diffusé de " + sender + " à " + envoyesCount + " utilisateurs");
     }
 
     private void broadcastUserConnection(String pseudo) {

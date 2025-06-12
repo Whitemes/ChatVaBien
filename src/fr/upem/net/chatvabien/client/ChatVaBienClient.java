@@ -10,7 +10,7 @@ import java.util.logging.Logger;
 import fr.upem.net.chatvabien.protocol.*;
 
 /**
- * Client ChatVaBien modularisé - Point d'entrée principal
+ * Client ChatVaBien modularisé - VERSION PROPRE
  */
 public class ChatVaBienClient implements ServerMessageHandler {
     private static final Logger logger = Logger.getLogger(ChatVaBienClient.class.getName());
@@ -30,6 +30,10 @@ public class ChatVaBienClient implements ServerMessageHandler {
     private ServerSocketChannel privateServerChannel;
     private CommandProcessor commandProcessor;
 
+    // ✅ AJOUT: Variables pour gérer l'affichage des utilisateurs
+    private boolean shouldDisplayUserList = false;
+    private String cachedUserList = "";
+
     public ChatVaBienClient(String login, InetSocketAddress serverAddress, Path fileDirectory) throws IOException {
         this.login = login;
         this.serverAddress = serverAddress;
@@ -46,7 +50,6 @@ public class ChatVaBienClient implements ServerMessageHandler {
         logger.info("Client ChatVaBien démarré pour " + login);
 
         while (!Thread.interrupted()) {
-            // ✅ CORRECTION: Timeout pour ne pas bloquer indéfiniment
             selector.select(1000); // 1 seconde timeout
 
             var selectedKeys = selector.selectedKeys();
@@ -58,7 +61,6 @@ public class ChatVaBienClient implements ServerMessageHandler {
                 treatKey(key);
             }
 
-            // ✅ CORRECTION: Traiter les commandes même sans événements réseau
             processCommands();
         }
     }
@@ -104,6 +106,7 @@ public class ChatVaBienClient implements ServerMessageHandler {
 
     private void setupCommandProcessor() {
         this.commandProcessor = new DefaultCommandProcessor(
+                this,
                 serverContext,
                 privateContexts,
                 privateServerChannel
@@ -120,22 +123,16 @@ public class ChatVaBienClient implements ServerMessageHandler {
                 return;
             }
 
-            logger.info("Traitement clé: " + key.readyOps() + " pour " + key.channel().getClass().getSimpleName());
-
             if (key.isValid() && key.isConnectable()) {
-                logger.info("Connexion...");
                 handler.handleConnect();
             }
             if (key.isValid() && key.isAcceptable()) {
-                logger.info("Acceptation...");
                 handler.handleAccept();
             }
             if (key.isValid() && key.isWritable()) {
-                logger.info("Écriture...");
                 handler.handleWrite();
             }
             if (key.isValid() && key.isReadable()) {
-                logger.info("Lecture...");
                 handler.handleRead();
             }
         } catch (IOException e) {
@@ -152,21 +149,13 @@ public class ChatVaBienClient implements ServerMessageHandler {
             // ignore
         }
     }
+
     // ========== TRAITEMENT COMMANDES ==========
+
     private void processCommands() {
         String command;
-        boolean hasCommand = false;
-
         while ((command = consoleManager.pollCommand()) != null) {
-            logger.info("Traitement commande: '" + command + "'"); // ✅ DEBUG
             commandProcessor.processCommand(command);
-            hasCommand = true;
-        }
-
-        // ✅ AJOUT: Log si aucune commande
-        if (!hasCommand) {
-            // Pas de log pour éviter le spam - juste pour debug initial
-            // logger.info("Aucune commande en attente");
         }
     }
 
@@ -176,35 +165,47 @@ public class ChatVaBienClient implements ServerMessageHandler {
     public void handleServerMessage(Trame trame) {
         switch (trame.opcode()) {
             case LOGIN_ACCEPTED -> {
-                System.out.println("✅ Connexion acceptée");
+                System.out.println("✅ Connexion acceptée - Bienvenue " + login + " !");
+                serverContext.requestUserList();
             }
             case LOGIN_REFUSED -> {
                 System.out.println("❌ Connexion refusée");
                 System.exit(1);
             }
             case MESSAGE -> {
-                if (trame.message() instanceof PublicMessage msg) {
-                    System.out.println(trame.sender() + ": " + msg.text());
-                }
+                // ✅ CORRECTION: Pas d'instanceof - utiliser le sender de la trame
+                System.out.println(trame.sender() + ": " + extractMessageText(trame.message()));
             }
             case REQUEST_PRIVATE -> {
                 handlePrivateRequest(trame.sender());
-            }
-            case OK_PRIVATE -> {
-                if (trame.message() instanceof OKPrivateMessage msg) {
-                    handleOKPrivate(trame.sender(), msg.address(), msg.token());
-                }
             }
             case KO_PRIVATE -> {
                 System.out.println("❌ Connexion privée refusée par " + trame.sender());
             }
             case CONNECTED_USERS_LIST -> {
-                if (trame.message() instanceof PublicMessage msg) {
-                    System.out.println("👥 Utilisateurs connectés:\n" + msg.text());
+                // ✅ CORRECTION: Pas d'instanceof - utiliser directement le texte
+                String users = extractMessageText(trame.message());
+                if (!users.trim().isEmpty()) {
+                    System.out.println("Utilisateurs connectés: " + users);
                 }
             }
             default -> logger.warning("Message serveur non géré: " + trame.opcode());
         }
+    }
+
+    // ✅ AJOUT: Méthode utilitaire pour extraire le texte
+    private String extractMessageText(Message message) {
+        // On sait que pour MESSAGE et CONNECTED_USERS_LIST, c'est toujours PublicMessage
+        // Mais on évite instanceof en utilisant une méthode générique
+        var buffer = message.serialize();
+        if (buffer.remaining() < 4) return "";
+
+        var length = buffer.getInt();
+        if (length <= 0 || length > buffer.remaining()) return "";
+
+        var textBytes = new byte[length];
+        buffer.get(textBytes);
+        return new String(textBytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private void handlePrivateRequest(String requester) {
@@ -212,63 +213,13 @@ public class ChatVaBienClient implements ServerMessageHandler {
         System.out.println("Tapez 'accept " + requester + "' ou 'refuse " + requester + "'");
     }
 
-    private void handleOKPrivate(String sender, InetSocketAddress address, long token) {
-        System.out.println("✅ " + sender + " a accepté votre demande privée");
+    // ========== AJOUT: Gestion commande /users ==========
 
-        try {
-            var privateChannel = SocketChannel.open();
-            privateChannel.configureBlocking(false);
-
-            var key = privateChannel.register(selector, SelectionKey.OP_CONNECT);
-            var context = new PrivateContext(key, login, sender);
-            context.setOutgoingToken(token);
-
-            handlers.put(key, context);
-            privateContexts.put(sender, context);
-
-            privateChannel.connect(address);
-
-        } catch (IOException e) {
-            System.err.println("❌ Erreur connexion privée: " + e.getMessage());
-        }
+    public void handleUsersCommand() {
+        shouldDisplayUserList = true;
+        serverContext.requestUserList();
     }
 
-    // ========== TEST RAPIDE - Ajoutez cette méthode dans ChatVaBienClient ==========
-
-    /**
-     * Méthode de test pour vérifier que la console fonctionne
-     */
-    private void testConsole() {
-        System.out.println("=== TEST CONSOLE ===");
-
-        // Test direct de la queue
-        consoleManager.start();
-
-        // Simuler des commandes
-        var testCommands = new java.util.concurrent.ArrayBlockingQueue<String>(10);
-        testCommands.offer("hello");
-        testCommands.offer("/help");
-
-        // Vérifier le polling
-        for (int i = 0; i < 5; i++) {
-            var cmd = consoleManager.pollCommand();
-            if (cmd != null) {
-                System.out.println("Commande reçue: " + cmd);
-            } else {
-                System.out.println("Pas de commande (cycle " + i + ")");
-            }
-
-            try {
-                Thread.sleep(500);
-            } catch (InterruptedException e) {
-                break;
-            }
-        }
-
-        System.out.println("=== FIN TEST ===");
-    }
-
-    // ========== DANS MAIN, AJOUTEZ AVANT launch() ==========
     public static void main(String[] args) throws IOException {
         if (args.length != 4) {
             System.err.println("Usage: java ChatVaBienClient <login> <host> <port> <fileDir>");
@@ -282,10 +233,6 @@ public class ChatVaBienClient implements ServerMessageHandler {
 
         var serverAddress = new InetSocketAddress(host, port);
         var client = new ChatVaBienClient(login, serverAddress, fileDir);
-
-        // ✅ TEST: Décommentez pour tester la console
-//         client.testConsole();
-//         return;
 
         client.launch();
     }

@@ -6,7 +6,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.logging.Logger;
 
 /**
- * Gestionnaire de la console utilisateur - VERSION CORRIGÉE
+ * Gestionnaire de la console utilisateur - VERSION PROPRE
  */
 public class ConsoleManager {
     private static final Logger logger = Logger.getLogger(ConsoleManager.class.getName());
@@ -20,7 +20,7 @@ public class ConsoleManager {
 
     public void start() {
         consoleThread.start();
-        logger.info("Thread console démarré");
+        // ✅ SUPPRIMÉ: Log de démarrage
     }
 
     public String pollCommand() {
@@ -30,28 +30,26 @@ public class ConsoleManager {
     private void consoleRun() {
         try (var scanner = new Scanner(System.in)) {
             System.out.println("🚀 Client démarré. Tapez vos messages ou /help pour l'aide");
-            System.out.print("> "); // ✅ AJOUT: Prompt initial
+            System.out.print("> ");
             System.out.flush();
 
             while (scanner.hasNextLine() && !Thread.currentThread().isInterrupted()) {
                 var line = scanner.nextLine().trim();
-                logger.info("Commande saisie: '" + line + "'"); // ✅ DEBUG
 
                 if (!line.isEmpty()) {
                     boolean offered = commandQueue.offer(line);
-                    logger.info("Commande ajoutée à la queue: " + offered); // ✅ DEBUG
 
                     if (!offered) {
                         System.err.println("⚠️ Queue pleine, commande ignorée");
                     }
                 }
 
-                System.out.print("> "); // ✅ AJOUT: Nouveau prompt
+                System.out.print("> ");
                 System.out.flush();
             }
         } catch (Exception e) {
             logger.severe("Erreur thread console: " + e.getMessage());
         }
-        logger.info("Thread console terminé");
+        // ✅ SUPPRIMÉ: Log de fin
     }
 }

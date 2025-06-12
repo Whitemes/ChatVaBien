@@ -12,7 +12,8 @@ import java.util.logging.Logger;
 import fr.upem.net.chatvabien.protocol.*;
 
 /**
- * Contexte de communication avec le serveur principal - VERSION CORRIGÉE
+ * Contexte de communication avec le serveur principal
+ * VERSION PROPRE - Debug retiré
  */
 public class ServerContext implements ChannelHandler {
     private static final Logger logger = Logger.getLogger(ServerContext.class.getName());
@@ -22,7 +23,7 @@ public class ServerContext implements ChannelHandler {
     private final SocketChannel sc;
     private final ByteBuffer bufferIn = ByteBuffer.allocate(BUFFER_SIZE);
     private final ByteBuffer bufferOut = ByteBuffer.allocate(BUFFER_SIZE);
-    private final Queue<ByteBuffer> outQueue = new ArrayDeque<>(); // ✅ CORRIGÉ: ByteBuffer
+    private final Queue<ByteBuffer> outQueue = new ArrayDeque<>();
 
     private final TrameReader trameReader = new TrameReader();
     private final String login;
@@ -62,24 +63,22 @@ public class ServerContext implements ChannelHandler {
 
     @Override
     public void handleWrite() throws IOException {
-        // ✅ CORRECTION CRITIQUE: Envoyer login dès que connecté
+        // Envoyer login dès que connecté
         if (!loginSent && connected) {
             sendLogin();
         }
 
         processOut();
 
-        // ✅ CORRECTION CRITIQUE: Gestion correcte du buffer
+        // Gestion correcte du buffer
         if (bufferOut.position() > 0) {
             bufferOut.flip();
             var written = sc.write(bufferOut);
-            logger.info("Bytes écrits: " + written);
 
-            // ✅ CORRECTION: Vérifier s'il reste des données
             if (bufferOut.hasRemaining()) {
-                bufferOut.compact(); // Garde les données non écrites
+                bufferOut.compact();
             } else {
-                bufferOut.clear(); // Buffer entièrement vidé
+                bufferOut.clear();
             }
         }
 
@@ -112,40 +111,31 @@ public class ServerContext implements ChannelHandler {
         var loginTrame = Trame.clientMessage(OPCODE.LOGIN, login, new LoginMessage());
         var buffer = loginTrame.toByteBuffer();
 
-        // ✅ DEBUG: Vérifier le contenu du buffer
-        logger.info("Trame LOGIN créée - taille: " + buffer.remaining());
-        logger.info("Contenu trame: " + dumpBuffer(buffer));
+        // ✅ SOLUTION ROBUSTE: Tenter d'écrire immédiatement
+        try {
+            var written = sc.write(buffer);
+            if (buffer.hasRemaining()) {
+                // Si pas tout écrit, mettre le reste en queue
+                outQueue.offer(buffer);
+            }
+        } catch (IOException e) {
+            // En cas d'erreur, utiliser la queue normale
+            outQueue.offer(buffer);
+        }
 
-        // ✅ CORRIGÉ: Ajouter directement le ByteBuffer à la queue
-        outQueue.offer(buffer);
         loginSent = true;
         updateInterestOps();
     }
 
-    // ✅ AJOUT: Méthode de debug pour voir le contenu des buffers
-    private static String dumpBuffer(ByteBuffer buffer) {
-        StringBuilder sb = new StringBuilder();
-        int pos = buffer.position();
-        int lim = buffer.limit();
-        for (int i = pos; i < lim; i++) {
-            byte b = buffer.get(i);
-            sb.append(String.format("%02X ", b));
-        }
-        return sb.toString();
-    }
-
-    // ✅ CORRECTION MAJEURE: processOut simplifié et fonctionnel
     private void processOut() {
         while (bufferOut.hasRemaining() && !outQueue.isEmpty()) {
             var buffer = outQueue.peek();
 
             if (bufferOut.remaining() >= buffer.remaining()) {
-                // ✅ DEBUG: Voir ce qu'on va écrire
-                logger.info("Ajout au bufferOut: " + dumpBuffer(buffer));
                 bufferOut.put(buffer);
                 outQueue.poll();
             } else {
-                break; // Pas assez de place, on attend le prochain cycle
+                break;
             }
         }
     }
@@ -193,6 +183,7 @@ public class ServerContext implements ChannelHandler {
 
     private void updateInterestOps() {
         var ops = SelectionKey.OP_READ;
+        // ✅ CORRIGÉ: Garder la logique originale qui fonctionne
         if ((!loginSent && connected) || !outQueue.isEmpty() || bufferOut.position() > 0) {
             ops |= SelectionKey.OP_WRITE;
         }
