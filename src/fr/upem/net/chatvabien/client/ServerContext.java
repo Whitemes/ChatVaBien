@@ -13,7 +13,6 @@ import fr.upem.net.chatvabien.protocol.*;
 
 /**
  * Contexte de communication avec le serveur principal
- * VERSION PROPRE - Debug retiré
  */
 public class ServerContext implements ChannelHandler {
     private static final Logger logger = Logger.getLogger(ServerContext.class.getName());
@@ -63,14 +62,12 @@ public class ServerContext implements ChannelHandler {
 
     @Override
     public void handleWrite() throws IOException {
-        // Envoyer login dès que connecté
         if (!loginSent && connected) {
             sendLogin();
         }
 
         processOut();
 
-        // Gestion correcte du buffer
         if (bufferOut.position() > 0) {
             bufferOut.flip();
             var written = sc.write(bufferOut);
@@ -111,15 +108,12 @@ public class ServerContext implements ChannelHandler {
         var loginTrame = Trame.clientMessage(OPCODE.LOGIN, login, new LoginMessage());
         var buffer = loginTrame.toByteBuffer();
 
-        // ✅ SOLUTION ROBUSTE: Tenter d'écrire immédiatement
         try {
             var written = sc.write(buffer);
             if (buffer.hasRemaining()) {
-                // Si pas tout écrit, mettre le reste en queue
                 outQueue.offer(buffer);
             }
         } catch (IOException e) {
-            // En cas d'erreur, utiliser la queue normale
             outQueue.offer(buffer);
         }
 
@@ -139,8 +133,6 @@ public class ServerContext implements ChannelHandler {
             }
         }
     }
-
-    // ========== API PUBLIQUE ==========
 
     public void queueMessage(Message message) {
         var trame = Trame.clientMessage(OPCODE.MESSAGE, login, message);
@@ -183,7 +175,6 @@ public class ServerContext implements ChannelHandler {
 
     private void updateInterestOps() {
         var ops = SelectionKey.OP_READ;
-        // ✅ CORRIGÉ: Garder la logique originale qui fonctionne
         if ((!loginSent && connected) || !outQueue.isEmpty() || bufferOut.position() > 0) {
             ops |= SelectionKey.OP_WRITE;
         }

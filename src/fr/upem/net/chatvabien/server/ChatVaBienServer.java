@@ -11,9 +11,9 @@ import java.util.logging.Logger;
 import fr.upem.net.chatvabien.protocol.*;
 
 /**
- * Serveur ChatVaBien refactorisé selon les bonnes pratiques NIO
- * VERSION PROPRE - Debug retiré
+ * Serveur ChatVaBien
  */
+
 public class ChatVaBienServer {
     private static final Logger logger = Logger.getLogger(ChatVaBienServer.class.getName());
     private static final int BUFFER_SIZE = 1024;
@@ -22,7 +22,6 @@ public class ChatVaBienServer {
     private final Selector selector;
     private final Map<String, User> connectedUsers = new ConcurrentHashMap<>();
 
-    // Connexion MDP optionnelle
     private final SocketChannel mdpChannel;
     private final Map<Long, Context> pendingAuthRequests = new ConcurrentHashMap<>();
 
@@ -34,7 +33,6 @@ public class ChatVaBienServer {
         this.selector = Selector.open();
         this.serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
 
-        // Connexion MDP optionnelle
         if (mdpAddress != null) {
             this.mdpChannel = SocketChannel.open();
             this.mdpChannel.configureBlocking(false);
@@ -105,7 +103,7 @@ public class ChatVaBienServer {
         }
 
         buffer.flip();
-        while (buffer.remaining() >= 9) { // 1 byte status + 8 bytes id
+        while (buffer.remaining() >= 9) {
             var status = buffer.get();
             var id = buffer.getLong();
             var context = pendingAuthRequests.remove(id);
@@ -140,7 +138,7 @@ public class ChatVaBienServer {
         private final TrameReader trameReader = new TrameReader();
 
         private String pseudo;
-        boolean authenticated = false; // ✅ RENDU PACKAGE-PRIVATE
+        boolean authenticated = false;
         private boolean closed = false;
 
         Context(SelectionKey key) {
@@ -203,16 +201,13 @@ public class ChatVaBienServer {
         }
 
         private void handleTrame(Trame trame) {
-            // ✅ CORRIGÉ: Validation pseudo plus souple
             if (pseudo == null) {
                 pseudo = trame.sender();
-            } else if (!pseudo.equals(trame.sender()) && !trame.sender().equals("Server")) {
+            } else if (!pseudo.equals(trame.sender()) && !trame.sender().equals("Server") && !trame.sender().isBlank()) {
                 logger.warning("Pseudo incohérent: reçu '" + trame.sender() + "', attendu '" + pseudo + "'");
-                // ✅ Ne pas fermer la connexion, juste ignorer le message
                 return;
             }
 
-            // Traitement polymorphe du message
             trame.message().process(this);
         }
 
@@ -262,22 +257,17 @@ public class ChatVaBienServer {
             }
         }
 
-        // ========== IMPLÉMENTATION ServerMessageProcessor ==========
-
         @Override
         public void processLogin() {
             if (connectedUsers.containsKey(pseudo)) {
                 queueResponse(OPCODE.LOGIN_REFUSED, new LoginMessage());
             } else {
-                // Authentification simple sans MDP
                 var user = new User(System.currentTimeMillis(), pseudo, sc, false);
                 connectedUsers.put(pseudo, user);
                 authenticated = true;
 
-                // ✅ CORRECTION: D'abord envoyer LOGIN_ACCEPTED
                 queueResponse(OPCODE.LOGIN_ACCEPTED, new LoginMessage());
 
-                // ✅ PUIS broadcaster la connexion
                 logger.info(pseudo + " s'est connecté");
                 broadcastUserConnection(pseudo);
             }
@@ -304,11 +294,9 @@ public class ChatVaBienServer {
                 return;
             }
 
-            // ✅ CORRIGÉ: Transmettre avec le pseudo correct
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                // ✅ IMPORTANT: Créer la trame avec le bon sender
                 var requestTrame = Trame.clientMessage(OPCODE.REQUEST_PRIVATE, pseudo, new PrivateRequestMessage(targetPseudo));
                 targetContext.outQueue.offer(requestTrame);
                 targetContext.updateInterestOps();
@@ -324,7 +312,6 @@ public class ChatVaBienServer {
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                // ✅ CORRIGÉ: Créer une réponse simple sans address/token pour l'instant
                 var responseTrame = Trame.clientMessage(OPCODE.OK_PRIVATE, pseudo, new PublicMessage(targetPseudo));
                 targetContext.outQueue.offer(responseTrame);
                 targetContext.updateInterestOps();
@@ -339,7 +326,6 @@ public class ChatVaBienServer {
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                // ✅ CORRIGÉ: Créer une réponse simple
                 var responseTrame = Trame.clientMessage(OPCODE.KO_PRIVATE, pseudo, new PublicMessage(targetPseudo));
                 targetContext.outQueue.offer(responseTrame);
                 targetContext.updateInterestOps();
@@ -355,15 +341,12 @@ public class ChatVaBienServer {
         }
     }
 
-    // ========== MÉTHODES DE BROADCAST ==========
-
     private void broadcast(String sender, String message) {
         var broadcastMessage = new PublicMessage(message);
         var trame = Trame.clientMessage(OPCODE.MESSAGE, sender, broadcastMessage);
 
         int envoyesCount = 0;
         for (var user : connectedUsers.values()) {
-            // ✅ CORRECTION: Diffuser à TOUS les utilisateurs authentifiés
             var key = user.sc().keyFor(selector);
             if (key != null) {
                 var context = (Context) key.attachment();
@@ -385,8 +368,6 @@ public class ChatVaBienServer {
     private void broadcastUserDisconnection(String pseudo) {
         broadcast("Server", pseudo + " s'est déconnecté");
     }
-
-    // ========== POINT D'ENTRÉE ==========
 
     public static void main(String[] args) throws IOException {
         if (args.length < 1) {

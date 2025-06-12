@@ -149,7 +149,6 @@ public record User(long id, String pseudo, SocketChannel sc, boolean isAuth) {
             return bb;
         }
 
-        // Utility class: prevent instantiation.
         private ProtocolEncoder() {}
     }
 }

@@ -36,8 +36,6 @@ public class PrivateContext implements ChannelHandler {
         this.remotePseudo = remotePseudo;
     }
 
-    // ========== GETTERS/SETTERS ==========
-
     public void setRemotePseudo(String remotePseudo) {
         this.remotePseudo = remotePseudo;
     }
@@ -58,8 +56,6 @@ public class PrivateContext implements ChannelHandler {
         return remotePseudo;
     }
 
-    // ========== CHANNEL HANDLER ==========
-
     @Override
     public void handleConnect() throws IOException {
         if (sc.finishConnect()) {
@@ -73,7 +69,7 @@ public class PrivateContext implements ChannelHandler {
     public void handleRead() throws IOException {
         var read = sc.read(bufferIn);
         if (read == -1) {
-            System.out.println("💔 Connexion privée fermée avec " + remotePseudo);
+            System.out.println("Connexion privée fermée avec " + remotePseudo);
             return;
         }
 
@@ -99,8 +95,6 @@ public class PrivateContext implements ChannelHandler {
         updateInterestOps();
     }
 
-    // ========== LOGIQUE PRIVÉE ==========
-
     private void sendOpen() {
         if (outgoingToken != -1) {
             var openBuffer = ByteBuffer.allocate(9);
@@ -124,7 +118,7 @@ public class PrivateContext implements ChannelHandler {
                     var token = bufferIn.getLong();
                     if (expectedToken == -1 || token == expectedToken) {
                         opened = true;
-                        System.out.println("🔗 Connexion privée établie avec " + remotePseudo);
+                        System.out.println("Connexion privée établie avec " + remotePseudo);
                     } else {
                         logger.warning("Token invalide reçu: " + token + ", attendu: " + expectedToken);
                         return;
@@ -153,11 +147,9 @@ public class PrivateContext implements ChannelHandler {
         }
     }
 
-    // ========== API PUBLIQUE ==========
-
     public void sendPrivateMessage(String message) {
         if (!opened) {
-            System.out.println("❌ Connexion privée pas encore établie avec " + remotePseudo);
+            System.out.println("Connexion privée pas encore établie avec " + remotePseudo);
             return;
         }
 

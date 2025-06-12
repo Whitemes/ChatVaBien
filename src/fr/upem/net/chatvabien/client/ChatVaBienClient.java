@@ -10,7 +10,7 @@ import java.util.logging.Logger;
 import fr.upem.net.chatvabien.protocol.*;
 
 /**
- * Client ChatVaBien modularisé - VERSION PROPRE
+ * Client ChatVaBien
  */
 public class ChatVaBienClient implements ServerMessageHandler {
     private static final Logger logger = Logger.getLogger(ChatVaBienClient.class.getName());
@@ -19,18 +19,15 @@ public class ChatVaBienClient implements ServerMessageHandler {
     private final Path fileDirectory;
     private final InetSocketAddress serverAddress;
 
-    // Composants modulaires
     private final Selector selector;
     private final Map<SelectionKey, ChannelHandler> handlers = new HashMap<>();
     private final Map<String, PrivateContext> privateContexts = new HashMap<>();
     private final ConsoleManager consoleManager = new ConsoleManager();
 
-    // Contextes principaux
     private ServerContext serverContext;
     private ServerSocketChannel privateServerChannel;
     private CommandProcessor commandProcessor;
 
-    // ✅ AJOUT: Variables pour gérer l'affichage des utilisateurs
     private boolean shouldDisplayUserList = false;
     private String cachedUserList = "";
 
@@ -50,7 +47,7 @@ public class ChatVaBienClient implements ServerMessageHandler {
         logger.info("Client ChatVaBien démarré pour " + login);
 
         while (!Thread.interrupted()) {
-            selector.select(1000); // 1 seconde timeout
+            selector.select(1000);
 
             var selectedKeys = selector.selectedKeys();
             var iterator = selectedKeys.iterator();
@@ -64,8 +61,6 @@ public class ChatVaBienClient implements ServerMessageHandler {
             processCommands();
         }
     }
-
-    // ========== SETUP ==========
 
     private void setupServerConnection() throws IOException {
         var serverChannel = SocketChannel.open();
@@ -113,8 +108,6 @@ public class ChatVaBienClient implements ServerMessageHandler {
         );
     }
 
-    // ========== TRAITEMENT ÉVÉNEMENTS ==========
-
     private void treatKey(SelectionKey key) {
         try {
             var handler = handlers.get(key);
@@ -150,8 +143,6 @@ public class ChatVaBienClient implements ServerMessageHandler {
         }
     }
 
-    // ========== TRAITEMENT COMMANDES ==========
-
     private void processCommands() {
         String command;
         while ((command = consoleManager.pollCommand()) != null) {
@@ -159,31 +150,27 @@ public class ChatVaBienClient implements ServerMessageHandler {
         }
     }
 
-    // ========== GESTION MESSAGES SERVEUR ==========
-
     @Override
     public void handleServerMessage(Trame trame) {
         switch (trame.opcode()) {
             case LOGIN_ACCEPTED -> {
-                System.out.println("✅ Connexion acceptée - Bienvenue " + login + " !");
+                System.out.println("Connexion acceptée - Bienvenue " + login + " !");
                 serverContext.requestUserList();
             }
             case LOGIN_REFUSED -> {
-                System.out.println("❌ Connexion refusée");
+                System.out.println("Connexion refusée");
                 System.exit(1);
             }
             case MESSAGE -> {
-                // ✅ CORRECTION: Pas d'instanceof - utiliser le sender de la trame
                 System.out.println(trame.sender() + ": " + extractMessageText(trame.message()));
             }
             case REQUEST_PRIVATE -> {
                 handlePrivateRequest(trame.sender());
             }
             case KO_PRIVATE -> {
-                System.out.println("❌ Connexion privée refusée par " + trame.sender());
+                System.out.println("Connexion privée refusée par " + trame.sender());
             }
             case CONNECTED_USERS_LIST -> {
-                // ✅ CORRECTION: Pas d'instanceof - utiliser directement le texte
                 String users = extractMessageText(trame.message());
                 if (!users.trim().isEmpty()) {
                     System.out.println("Utilisateurs connectés: " + users);
@@ -193,10 +180,7 @@ public class ChatVaBienClient implements ServerMessageHandler {
         }
     }
 
-    // ✅ AJOUT: Méthode utilitaire pour extraire le texte
     private String extractMessageText(Message message) {
-        // On sait que pour MESSAGE et CONNECTED_USERS_LIST, c'est toujours PublicMessage
-        // Mais on évite instanceof en utilisant une méthode générique
         var buffer = message.serialize();
         if (buffer.remaining() < 4) return "";
 
@@ -209,11 +193,9 @@ public class ChatVaBienClient implements ServerMessageHandler {
     }
 
     private void handlePrivateRequest(String requester) {
-        System.out.println("📨 Demande de connexion privée de " + requester);
+        System.out.println("Demande de connexion privée de " + requester);
         System.out.println("Tapez 'accept " + requester + "' ou 'refuse " + requester + "'");
     }
-
-    // ========== AJOUT: Gestion commande /users ==========
 
     public void handleUsersCommand() {
         shouldDisplayUserList = true;

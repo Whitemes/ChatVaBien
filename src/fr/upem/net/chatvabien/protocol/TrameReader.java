@@ -27,7 +27,6 @@ public class TrameReader implements Reader<Trame> {
             throw new IllegalStateException();
         }
 
-        // Boucle pour traiter plusieurs états dans le même appel
         while (bb.hasRemaining()) {
             switch (state) {
                 case WAITING_OPCODE -> {
@@ -68,7 +67,6 @@ public class TrameReader implements Reader<Trame> {
             }
         }
 
-        // Si on arrive ici, on a besoin de plus de données
         return ProcessStatus.REFILL;
     }
 
@@ -113,7 +111,6 @@ public class TrameReader implements Reader<Trame> {
     private ProcessStatus parsePrivateRequest(ByteBuffer bb) {
         var status = messageReader.process(bb);
         if (status == ProcessStatus.DONE) {
-            // ✅ CORRIGÉ: Le target est dans le message, pas le sender
             String targetPseudo = messageReader.get();
             message = new PrivateRequestMessage(targetPseudo);
             messageReader.reset();
@@ -122,24 +119,20 @@ public class TrameReader implements Reader<Trame> {
     }
 
     private ProcessStatus parseOKPrivate(ByteBuffer bb) {
-        // ✅ VERSION SIMPLIFIÉE: Juste le target pseudo comme PublicMessage
         var status = messageReader.process(bb);
         if (status == ProcessStatus.DONE) {
             String targetPseudo = messageReader.get();
             messageReader.reset();
-            // ✅ TEMPORAIRE: Utiliser PublicMessage pour éviter les NullPointerException
             message = new PublicMessage(targetPseudo);
         }
         return status;
     }
 
     private ProcessStatus parseKOPrivate(ByteBuffer bb) {
-        // ✅ VERSION SIMPLIFIÉE: Juste le target pseudo comme PublicMessage
         var status = messageReader.process(bb);
         if (status == ProcessStatus.DONE) {
             String targetPseudo = messageReader.get();
             messageReader.reset();
-            // ✅ TEMPORAIRE: Utiliser PublicMessage pour éviter les problèmes
             message = new PublicMessage(targetPseudo);
         }
         return status;
