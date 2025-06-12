@@ -111,7 +111,18 @@ public class ServerContext implements ChannelHandler {
         var loginTrame = Trame.clientMessage(OPCODE.LOGIN, login, new LoginMessage());
         var buffer = loginTrame.toByteBuffer();
 
-        outQueue.offer(buffer);
+        // ✅ SOLUTION ROBUSTE: Tenter d'écrire immédiatement
+        try {
+            var written = sc.write(buffer);
+            if (buffer.hasRemaining()) {
+                // Si pas tout écrit, mettre le reste en queue
+                outQueue.offer(buffer);
+            }
+        } catch (IOException e) {
+            // En cas d'erreur, utiliser la queue normale
+            outQueue.offer(buffer);
+        }
+
         loginSent = true;
         updateInterestOps();
     }
@@ -172,6 +183,7 @@ public class ServerContext implements ChannelHandler {
 
     private void updateInterestOps() {
         var ops = SelectionKey.OP_READ;
+        // ✅ CORRIGÉ: Garder la logique originale qui fonctionne
         if ((!loginSent && connected) || !outQueue.isEmpty() || bufferOut.position() > 0) {
             ops |= SelectionKey.OP_WRITE;
         }

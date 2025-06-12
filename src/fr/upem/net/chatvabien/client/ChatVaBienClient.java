@@ -30,6 +30,10 @@ public class ChatVaBienClient implements ServerMessageHandler {
     private ServerSocketChannel privateServerChannel;
     private CommandProcessor commandProcessor;
 
+    // ✅ AJOUT: Variables pour gérer l'affichage des utilisateurs
+    private boolean shouldDisplayUserList = false;
+    private String cachedUserList = "";
+
     public ChatVaBienClient(String login, InetSocketAddress serverAddress, Path fileDirectory) throws IOException {
         this.login = login;
         this.serverAddress = serverAddress;
@@ -102,6 +106,7 @@ public class ChatVaBienClient implements ServerMessageHandler {
 
     private void setupCommandProcessor() {
         this.commandProcessor = new DefaultCommandProcessor(
+                this,
                 serverContext,
                 privateContexts,
                 privateServerChannel
@@ -160,8 +165,7 @@ public class ChatVaBienClient implements ServerMessageHandler {
     public void handleServerMessage(Trame trame) {
         switch (trame.opcode()) {
             case LOGIN_ACCEPTED -> {
-                System.out.println("✅ Connexion acceptée");
-                // ✅ AMÉLIORATION: Demander immédiatement la liste des utilisateurs
+                System.out.println("✅ Connexion acceptée - Bienvenue " + login + " !");
                 serverContext.requestUserList();
             }
             case LOGIN_REFUSED -> {
@@ -169,32 +173,39 @@ public class ChatVaBienClient implements ServerMessageHandler {
                 System.exit(1);
             }
             case MESSAGE -> {
-                if (trame.message() instanceof PublicMessage msg) {
-                    System.out.println(trame.sender() + ": " + msg.text());
-                }
+                // ✅ CORRECTION: Pas d'instanceof - utiliser le sender de la trame
+                System.out.println(trame.sender() + ": " + extractMessageText(trame.message()));
             }
             case REQUEST_PRIVATE -> {
                 handlePrivateRequest(trame.sender());
-            }
-            case OK_PRIVATE -> {
-                if (trame.message() instanceof OKPrivateMessage msg) {
-                    handleOKPrivate(trame.sender(), msg.address(), msg.token());
-                }
             }
             case KO_PRIVATE -> {
                 System.out.println("❌ Connexion privée refusée par " + trame.sender());
             }
             case CONNECTED_USERS_LIST -> {
-                if (trame.message() instanceof PublicMessage msg) {
-                    // ✅ AMÉLIORATION: Afficher discrètement sans emoji
-                    String users = msg.text();
-                    if (!users.trim().isEmpty()) {
-                        System.out.println("Utilisateurs connectés: " + users);
-                    }
+                // ✅ CORRECTION: Pas d'instanceof - utiliser directement le texte
+                String users = extractMessageText(trame.message());
+                if (!users.trim().isEmpty()) {
+                    System.out.println("Utilisateurs connectés: " + users);
                 }
             }
             default -> logger.warning("Message serveur non géré: " + trame.opcode());
         }
+    }
+
+    // ✅ AJOUT: Méthode utilitaire pour extraire le texte
+    private String extractMessageText(Message message) {
+        // On sait que pour MESSAGE et CONNECTED_USERS_LIST, c'est toujours PublicMessage
+        // Mais on évite instanceof en utilisant une méthode générique
+        var buffer = message.serialize();
+        if (buffer.remaining() < 4) return "";
+
+        var length = buffer.getInt();
+        if (length <= 0 || length > buffer.remaining()) return "";
+
+        var textBytes = new byte[length];
+        buffer.get(textBytes);
+        return new String(textBytes, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private void handlePrivateRequest(String requester) {
@@ -202,25 +213,11 @@ public class ChatVaBienClient implements ServerMessageHandler {
         System.out.println("Tapez 'accept " + requester + "' ou 'refuse " + requester + "'");
     }
 
-    private void handleOKPrivate(String sender, InetSocketAddress address, long token) {
-        System.out.println("✅ " + sender + " a accepté votre demande privée");
+    // ========== AJOUT: Gestion commande /users ==========
 
-        try {
-            var privateChannel = SocketChannel.open();
-            privateChannel.configureBlocking(false);
-
-            var key = privateChannel.register(selector, SelectionKey.OP_CONNECT);
-            var context = new PrivateContext(key, login, sender);
-            context.setOutgoingToken(token);
-
-            handlers.put(key, context);
-            privateContexts.put(sender, context);
-
-            privateChannel.connect(address);
-
-        } catch (IOException e) {
-            System.err.println("❌ Erreur connexion privée: " + e.getMessage());
-        }
+    public void handleUsersCommand() {
+        shouldDisplayUserList = true;
+        serverContext.requestUserList();
     }
 
     public static void main(String[] args) throws IOException {

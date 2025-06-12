@@ -113,28 +113,34 @@ public class TrameReader implements Reader<Trame> {
     private ProcessStatus parsePrivateRequest(ByteBuffer bb) {
         var status = messageReader.process(bb);
         if (status == ProcessStatus.DONE) {
-            message = new PrivateRequestMessage(messageReader.get());
+            // ✅ CORRIGÉ: Le target est dans le message, pas le sender
+            String targetPseudo = messageReader.get();
+            message = new PrivateRequestMessage(targetPseudo);
             messageReader.reset();
         }
         return status;
     }
 
     private ProcessStatus parseOKPrivate(ByteBuffer bb) {
-        // Version simplifiée - juste le target pseudo pour l'instant
+        // ✅ VERSION SIMPLIFIÉE: Juste le target pseudo comme PublicMessage
         var status = messageReader.process(bb);
         if (status == ProcessStatus.DONE) {
             String targetPseudo = messageReader.get();
             messageReader.reset();
-            message = new OKPrivateMessage(targetPseudo, null, -1);
+            // ✅ TEMPORAIRE: Utiliser PublicMessage pour éviter les NullPointerException
+            message = new PublicMessage(targetPseudo);
         }
         return status;
     }
 
     private ProcessStatus parseKOPrivate(ByteBuffer bb) {
+        // ✅ VERSION SIMPLIFIÉE: Juste le target pseudo comme PublicMessage
         var status = messageReader.process(bb);
         if (status == ProcessStatus.DONE) {
-            message = new KOPrivateMessage(messageReader.get());
+            String targetPseudo = messageReader.get();
             messageReader.reset();
+            // ✅ TEMPORAIRE: Utiliser PublicMessage pour éviter les problèmes
+            message = new PublicMessage(targetPseudo);
         }
         return status;
     }

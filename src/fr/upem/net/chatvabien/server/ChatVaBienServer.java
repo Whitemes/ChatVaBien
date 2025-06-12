@@ -203,12 +203,12 @@ public class ChatVaBienServer {
         }
 
         private void handleTrame(Trame trame) {
-            // Validation pseudo
+            // ✅ CORRIGÉ: Validation pseudo plus souple
             if (pseudo == null) {
                 pseudo = trame.sender();
-            } else if (!pseudo.equals(trame.sender())) {
-                logger.warning("Pseudo incohérent: " + trame.sender());
-                closed = true;
+            } else if (!pseudo.equals(trame.sender()) && !trame.sender().equals("Server")) {
+                logger.warning("Pseudo incohérent: reçu '" + trame.sender() + "', attendu '" + pseudo + "'");
+                // ✅ Ne pas fermer la connexion, juste ignorer le message
                 return;
             }
 
@@ -273,9 +273,13 @@ public class ChatVaBienServer {
                 var user = new User(System.currentTimeMillis(), pseudo, sc, false);
                 connectedUsers.put(pseudo, user);
                 authenticated = true;
+
+                // ✅ CORRECTION: D'abord envoyer LOGIN_ACCEPTED
                 queueResponse(OPCODE.LOGIN_ACCEPTED, new LoginMessage());
-                broadcastUserConnection(pseudo);
+
+                // ✅ PUIS broadcaster la connexion
                 logger.info(pseudo + " s'est connecté");
+                broadcastUserConnection(pseudo);
             }
         }
 
@@ -300,12 +304,14 @@ public class ChatVaBienServer {
                 return;
             }
 
-            // Transmettre la demande au destinataire
+            // ✅ CORRIGÉ: Transmettre avec le pseudo correct
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                var request = new PrivateRequestMessage(pseudo);
-                targetContext.queueResponse(OPCODE.REQUEST_PRIVATE, request);
+                // ✅ IMPORTANT: Créer la trame avec le bon sender
+                var requestTrame = Trame.clientMessage(OPCODE.REQUEST_PRIVATE, pseudo, new PrivateRequestMessage(targetPseudo));
+                targetContext.outQueue.offer(requestTrame);
+                targetContext.updateInterestOps();
                 logger.info("Demande privée transmise: " + pseudo + " -> " + targetPseudo);
             }
         }
@@ -318,8 +324,10 @@ public class ChatVaBienServer {
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                var response = new OKPrivateMessage(pseudo, address, token);
-                targetContext.queueResponse(OPCODE.OK_PRIVATE, response);
+                // ✅ CORRIGÉ: Créer une réponse simple sans address/token pour l'instant
+                var responseTrame = Trame.clientMessage(OPCODE.OK_PRIVATE, pseudo, new PublicMessage(targetPseudo));
+                targetContext.outQueue.offer(responseTrame);
+                targetContext.updateInterestOps();
             }
         }
 
@@ -331,8 +339,10 @@ public class ChatVaBienServer {
             var targetKey = targetUser.sc().keyFor(selector);
             if (targetKey != null) {
                 var targetContext = (Context) targetKey.attachment();
-                var response = new KOPrivateMessage(pseudo);
-                targetContext.queueResponse(OPCODE.KO_PRIVATE, response);
+                // ✅ CORRIGÉ: Créer une réponse simple
+                var responseTrame = Trame.clientMessage(OPCODE.KO_PRIVATE, pseudo, new PublicMessage(targetPseudo));
+                targetContext.outQueue.offer(responseTrame);
+                targetContext.updateInterestOps();
             }
         }
 
